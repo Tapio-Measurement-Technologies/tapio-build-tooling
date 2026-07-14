@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@7f4fc3e22c37d6ff65e88745f38bd3157c663f7c
+        with:
+          python-version: "3.12"
+
+      - name: Install hashed tooling dependencies
+        run: |
+          python -m pip install --require-hashes -r requirements.txt
+          python -m pip install --no-deps --no-build-isolation .
+
+      - name: Validate package
+        run: |
+          tapio-build --project . config validate
+          tapio-build --project . python requirements compile --check
+          python -m unittest discover -v
+

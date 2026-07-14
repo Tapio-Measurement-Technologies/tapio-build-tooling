@@ -1,0 +1,91 @@
+name: Python supply-chain evidence
+description: Validate locks, generate source SBOM, and audit Python dependencies
+
+inputs:
+  config:
+    description: Configuration path relative to project root
+    default: build-tooling.toml
+  product:
+    description: Product ID
+    required: true
+  requirement-group:
+    description: Requirement group used for SBOM and audit
+    default: runtime
+  output:
+    description: Source SBOM output path
+    default: dist/source.cdx.json
+  version:
+    description: Product version; defaults to commit-derived local version
+    default: ""
+  platform:
+    description: Target platform; defaults to runner OS
+    default: ""
+  audit:
+    description: Run pip-audit against selected lock
+    default: "true"
+  upload-name:
+    description: Uploaded SBOM artifact name
+    default: source-sbom
+  python-version:
+    description: Configured Python version
+    default: "3.12"
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@7f4fc3e22c37d6ff65e88745f38bd3157c663f7c
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install build tooling from hashed lock
+      shell: bash
+      env:
+        TOOLING_ROOT: ${{ github.action_path }}/../..
+      run: |
+        python -m pip install --require-hashes -r "$TOOLING_ROOT/requirements.txt"
+        python -m pip install --no-deps --no-build-isolation "$TOOLING_ROOT"
+
+    - name: Validate supply-chain configuration
+      shell: bash
+      env:
+        CONFIG: ${{ inputs.config }}
+      run: tapio-build --project "$GITHUB_WORKSPACE" --config "$CONFIG" config validate
+
+    - name: Check generated requirement locks
+      shell: bash
+      env:
+        CONFIG: ${{ inputs.config }}
+      run: tapio-build --project "$GITHUB_WORKSPACE" --config "$CONFIG" python requirements compile --check
+
+    - name: Generate source SBOM
+      shell: bash
+      env:
+        CONFIG: ${{ inputs.config }}
+        PRODUCT: ${{ inputs.product }}
+        GROUP: ${{ inputs.requirement-group }}
+        OUTPUT: ${{ inputs.output }}
+        VERSION: ${{ inputs.version }}
+        TARGET_PLATFORM: ${{ inputs.platform }}
+      run: |
+        if [[ -z "$VERSION" ]]; then VERSION="0.0.0+${GITHUB_SHA:0:12}"; fi
+        if [[ -z "$TARGET_PLATFORM" ]]; then TARGET_PLATFORM="${RUNNER_OS,,}"; fi
+        tapio-build --project "$GITHUB_WORKSPACE" --config "$CONFIG" python sbom \
+          --group "$GROUP" --product "$PRODUCT" --output "$OUTPUT" \
+          --version "$VERSION" --platform "$TARGET_PLATFORM" --commit-sha "$GITHUB_SHA"
+
+    - name: Upload source SBOM
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: ${{ inputs.upload-name }}
+        path: ${{ inputs.output }}
+        if-no-files-found: error
+
+    - name: Audit runtime dependencies
+      if: ${{ inputs.audit == 'true' }}
+      shell: bash
+      env:
+        CONFIG: ${{ inputs.config }}
+        GROUP: ${{ inputs.requirement-group }}
+      run: tapio-build --project "$GITHUB_WORKSPACE" --config "$CONFIG" python audit --group "$GROUP"
+
