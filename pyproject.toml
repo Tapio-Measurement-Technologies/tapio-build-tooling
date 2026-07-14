@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools==82.0.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tapio-build-tooling"
+version = "0.1.0"
+description = "Reusable supply-chain and release tooling for Tapio products"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "GPL-3.0-or-later"
+authors = [
+  { name = "Tapio Measurement Technologies Oy" },
+]
+dependencies = [
+  "cyclonedx-bom==7.3.0",
+  "packaging==26.2",
+  "pip-audit==2.10.1",
+  "pip-tools==7.5.3",
+]
+
+[project.scripts]
+tapio-build = "tapio_build_tools.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+
