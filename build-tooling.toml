@@ -1,0 +1,17 @@
+schema-version = 1
+
+[organization]
+name = "Tapio Measurement Technologies Oy"
+website = "https://www.tapiotechnologies.com"
+
+[products.tapio-build-tooling]
+name = "Tapio Build Tooling"
+license-id = "GPL-3.0-or-later"
+
+[ecosystems.python]
+version = "3.12"
+
+[[ecosystems.python.requirements]]
+name = "tooling"
+input = "requirements.in"
+lock = "requirements.txt"

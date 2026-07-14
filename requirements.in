@@ -1,0 +1,8 @@
+--index-url https://pypi.org/simple
+--only-binary :all:
+
+cyclonedx-bom==7.3.0
+packaging==26.2
+pip-audit==2.10.1
+pip-tools==7.5.3
+
