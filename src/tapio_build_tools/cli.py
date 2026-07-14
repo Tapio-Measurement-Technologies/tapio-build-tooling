@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 from tapio_build_tools.config import ConfigError, load_config
+from tapio_build_tools.ecosystems.python.audit import AuditError, audit
 from tapio_build_tools.ecosystems.python.requirements import (
     RequirementsError,
     compile_requirements,
 )
+from tapio_build_tools.ecosystems.python.sbom import SbomError, generate_sbom
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -30,6 +33,22 @@ def build_parser() -> argparse.ArgumentParser:
     compile_mode = compile_parser.add_mutually_exclusive_group()
     compile_mode.add_argument("--check", action="store_true", help="fail if locks would change")
     compile_mode.add_argument("--upgrade", action="store_true", help="upgrade allowed versions")
+
+    audit_parser = python_commands.add_parser("audit", help="audit a hashed requirement lock")
+    audit_parser.add_argument("--group", required=True, help="configured requirement group")
+
+    sbom = python_commands.add_parser("sbom", help="generate CycloneDX evidence")
+    sbom.add_argument("--group", required=True, help="configured requirement group")
+    sbom.add_argument("--product", help="configured product ID")
+    sbom.add_argument("--output", required=True, help="output CycloneDX JSON path")
+    sbom.add_argument("--version", default=os.environ.get("GITHUB_REF_NAME", "0.0.0+local"))
+    sbom.add_argument("--commit-sha", help="source commit SHA")
+    sbom.add_argument("--platform", dest="build_platform", help="target platform")
+    sbom.add_argument("--build-timestamp", help="UTC evidence timestamp")
+    sbom.add_argument("--spec-version", default="1.6", choices=("1.6", "1.7"))
+    sbom.add_argument("--artifact", help="final artifact represented by this SBOM")
+    sbom.add_argument("--artifact-kind", choices=("pyinstaller",))
+    sbom.add_argument("--pyinstaller-version", help="embedded PyInstaller version")
     return parser
 
 
@@ -51,7 +70,27 @@ def main(argv: list[str] | None = None) -> int:
             for result in results:
                 print(f"{result.group}: {result.status}")
             return 0
-    except (ConfigError, RequirementsError) as exc:
+        if args.command == "python" and args.python_command == "audit":
+            audit(config, args.group)
+            return 0
+        if args.command == "python" and args.python_command == "sbom":
+            output = generate_sbom(
+                config,
+                group_name=args.group,
+                product_id=args.product,
+                output=args.output,
+                version=args.version,
+                commit_sha=args.commit_sha,
+                build_platform=args.build_platform,
+                build_timestamp=args.build_timestamp,
+                spec_version=args.spec_version,
+                artifact=args.artifact,
+                artifact_kind=args.artifact_kind,
+                pyinstaller_version=args.pyinstaller_version,
+            )
+            print(f"Generated CycloneDX SBOM: {output}")
+            return 0
+    except (AuditError, ConfigError, RequirementsError, SbomError, ValueError) as exc:
         print(f"tapio-build: error: {exc}", file=sys.stderr)
         return 2
     parser.error("unsupported command")
