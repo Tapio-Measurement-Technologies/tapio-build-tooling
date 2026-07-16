@@ -50,12 +50,30 @@ class PythonEcosystem:
 
 
 @dataclass(frozen=True)
+class NodeEcosystem:
+    version: str
+    package: Path
+    lock: Path
+
+
+@dataclass(frozen=True)
 class Config:
     project: Path
     path: Path
     organization: Organization
     products: dict[str, Product]
-    python: PythonEcosystem
+    python: PythonEcosystem | None
+    node: NodeEcosystem | None
+
+    def require_python(self) -> PythonEcosystem:
+        if self.python is None:
+            raise ConfigError("Python ecosystem is not configured")
+        return self.python
+
+    def require_node(self) -> NodeEcosystem:
+        if self.node is None:
+            raise ConfigError("Node ecosystem is not configured")
+        return self.node
 
     def product(self, product_id: str | None) -> Product:
         if product_id is None:
@@ -166,41 +184,75 @@ def load_config(
         )
 
     ecosystems_data = _table(data.get("ecosystems"), "ecosystems")
-    _keys(ecosystems_data, {"python"}, "ecosystems")
-    python_data = _table(ecosystems_data.get("python"), "ecosystems.python")
-    _keys(python_data, {"version", "requirements"}, "ecosystems.python")
-    version = _required_string(python_data, "version", "ecosystems.python")
-    raw_groups = python_data.get("requirements")
-    if not isinstance(raw_groups, list) or not raw_groups:
-        raise ConfigError("ecosystems.python.requirements must be a non-empty array")
+    _keys(ecosystems_data, {"python", "node"}, "ecosystems")
+    if not ecosystems_data:
+        raise ConfigError("at least one ecosystem must be configured")
 
-    groups: list[RequirementGroup] = []
-    names: set[str] = set()
-    for index, raw_group in enumerate(raw_groups):
-        label = f"ecosystems.python.requirements[{index}]"
-        group_data = _table(raw_group, label)
-        _keys(group_data, {"name", "input", "lock"}, label)
-        name = _required_string(group_data, "name", label)
-        if name in names:
-            raise ConfigError(f"duplicate requirement group: {name}")
-        names.add(name)
-        lock_value = _required_string(group_data, "lock", label)
-        input_value = _optional_string(group_data, "input", label)
-        groups.append(
-            RequirementGroup(
-                name=name,
-                lock=_project_path(
-                    project_root,
-                    lock_value,
-                    f"{label}.lock",
-                    must_exist=require_lock_files,
-                ),
-                input=(
-                    _project_path(project_root, input_value, f"{label}.input", must_exist=True)
-                    if input_value is not None
-                    else None
-                ),
+    python: PythonEcosystem | None = None
+    if "python" in ecosystems_data:
+        python_data = _table(ecosystems_data["python"], "ecosystems.python")
+        _keys(python_data, {"version", "requirements"}, "ecosystems.python")
+        version = _required_string(python_data, "version", "ecosystems.python")
+        raw_groups = python_data.get("requirements")
+        if not isinstance(raw_groups, list) or not raw_groups:
+            raise ConfigError("ecosystems.python.requirements must be a non-empty array")
+
+        groups: list[RequirementGroup] = []
+        names: set[str] = set()
+        for index, raw_group in enumerate(raw_groups):
+            label = f"ecosystems.python.requirements[{index}]"
+            group_data = _table(raw_group, label)
+            _keys(group_data, {"name", "input", "lock"}, label)
+            name = _required_string(group_data, "name", label)
+            if name in names:
+                raise ConfigError(f"duplicate requirement group: {name}")
+            names.add(name)
+            lock_value = _required_string(group_data, "lock", label)
+            input_value = _optional_string(group_data, "input", label)
+            groups.append(
+                RequirementGroup(
+                    name=name,
+                    lock=_project_path(
+                        project_root,
+                        lock_value,
+                        f"{label}.lock",
+                        must_exist=require_lock_files,
+                    ),
+                    input=(
+                        _project_path(project_root, input_value, f"{label}.input", must_exist=True)
+                        if input_value is not None
+                        else None
+                    ),
+                )
             )
+        python = PythonEcosystem(version=version, requirements=tuple(groups))
+
+    node: NodeEcosystem | None = None
+    if "node" in ecosystems_data:
+        node_data = _table(ecosystems_data["node"], "ecosystems.node")
+        _keys(node_data, {"version", "package", "lock"}, "ecosystems.node")
+        package = _project_path(
+            project_root,
+            _required_string(node_data, "package", "ecosystems.node"),
+            "ecosystems.node.package",
+            must_exist=True,
+        )
+        lock = _project_path(
+            project_root,
+            _required_string(node_data, "lock", "ecosystems.node"),
+            "ecosystems.node.lock",
+            must_exist=require_lock_files,
+        )
+        if package.name != "package.json":
+            raise ConfigError("ecosystems.node.package must reference package.json")
+        if lock.name != "package-lock.json":
+            raise ConfigError("ecosystems.node.lock must reference package-lock.json")
+        if package.parent != lock.parent:
+            raise ConfigError("ecosystems.node.package and ecosystems.node.lock must share a directory")
+        node = NodeEcosystem(
+            version=_required_string(node_data, "version", "ecosystems.node"),
+            package=package,
+            lock=lock,
         )
 
     return Config(
@@ -208,6 +260,6 @@ def load_config(
         path=path,
         organization=organization,
         products=products,
-        python=PythonEcosystem(version=version, requirements=tuple(groups)),
+        python=python,
+        node=node,
     )
-

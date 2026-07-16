@@ -13,7 +13,7 @@ class AuditError(RuntimeError):
 
 
 def audit(config: Config, group_name: str) -> None:
-    group = config.python.requirement(group_name)
+    group = config.require_python().requirement(group_name)
     command = [
         sys.executable,
         "-m",
@@ -27,4 +27,3 @@ def audit(config: Config, group_name: str) -> None:
         subprocess.run(command, cwd=config.project, check=True)
     except subprocess.CalledProcessError as exc:
         raise AuditError(f"audit failed for requirement group {group_name!r}") from exc
-

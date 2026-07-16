@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-import hashlib
 import importlib.metadata
 import json
 import os
@@ -13,41 +11,23 @@ import re
 import subprocess
 import sys
 import tempfile
-from urllib.parse import quote
 
 from packaging.requirements import Requirement
 
 from tapio_build_tools.config import Config, Product
 from tapio_build_tools.cyclonedx import validate_json
+from tapio_build_tools.evidence import (
+    git_commit,
+    product_component,
+    sha256_file,
+    target_platform,
+    upsert_property,
+    utc_now,
+)
 
 
 class SbomError(RuntimeError):
     """SBOM generation failed."""
-
-
-def utc_now() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-
-
-def git_commit(project: Path) -> str:
-    if value := os.environ.get("GITHUB_SHA"):
-        return value
-    try:
-        result = subprocess.run(
-            ["git", "-C", str(project), "rev-parse", "HEAD"],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except (OSError, subprocess.CalledProcessError):
-        return "unknown"
-    return result.stdout.strip()
-
-
-def target_platform() -> str:
-    if value := os.environ.get("RUNNER_OS"):
-        return value.lower()
-    return platform_module.system().lower() or "unknown"
 
 
 def normalized_name(name: str) -> str:
@@ -74,14 +54,6 @@ def direct_requirement_names(path: Path) -> set[str]:
     return names
 
 
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        for chunk in iter(lambda: source.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def _pyinstaller_version(explicit: str | None) -> str:
     if explicit:
         return explicit
@@ -91,38 +63,6 @@ def _pyinstaller_version(explicit: str | None) -> str:
         raise SbomError(
             "PyInstaller must be installed or --pyinstaller-version supplied for artifact evidence"
         ) from exc
-
-
-def _upsert_property(properties: list[dict[str, str]], name: str, value: str) -> None:
-    for item in properties:
-        if item.get("name") == name:
-            item["value"] = value
-            return
-    properties.append({"name": name, "value": value})
-
-
-def _product_component(product: Product, organization: str, version: str) -> dict:
-    purl = f"pkg:generic/{quote(product.id, safe='.-_')}@{quote(version, safe='.+-_')}"
-    component: dict = {
-        "type": product.component_type,
-        "bom-ref": purl,
-        "name": product.name,
-        "version": version,
-        "publisher": organization,
-        "purl": purl,
-    }
-    if product.license_id:
-        component["licenses"] = [{"license": {"id": product.license_id}}]
-    elif product.license_name:
-        component["licenses"] = [{"license": {"name": product.license_name}}]
-    references = []
-    if product.website:
-        references.append({"type": "website", "url": product.website})
-    if product.repository:
-        references.append({"type": "vcs", "url": product.repository})
-    if references:
-        component["externalReferences"] = references
-    return component
 
 
 def add_pyinstaller_components(bom: dict, version: str) -> tuple[str, str]:
@@ -227,10 +167,10 @@ def _stamp(
     artifact: Path | None,
     pyinstaller_version: str | None,
 ) -> None:
-    group = config.python.requirement(group_name)
+    group = config.require_python().requirement(group_name)
     metadata = bom.setdefault("metadata", {})
     metadata["timestamp"] = build_timestamp
-    component = _product_component(product, config.organization.name, version)
+    component = product_component(product, config.organization.name, version)
     metadata["component"] = component
 
     embedded: tuple[str, ...] = ()
@@ -239,17 +179,17 @@ def _stamp(
         embedded = add_pyinstaller_components(bom, _pyinstaller_version(pyinstaller_version))
 
     properties = metadata.setdefault("properties", [])
-    _upsert_property(properties, "tapio:sbom:commit-sha", commit_sha)
-    _upsert_property(properties, "tapio:sbom:platform", build_platform)
-    _upsert_property(
+    upsert_property(properties, "tapio:sbom:commit-sha", commit_sha)
+    upsert_property(properties, "tapio:sbom:platform", build_platform)
+    upsert_property(
         properties,
         "tapio:sbom:requirements-file",
         str(group.lock.relative_to(config.project)),
     )
-    _upsert_property(properties, "tapio:sbom:generator", "cyclonedx-py")
+    upsert_property(properties, "tapio:sbom:generator", "cyclonedx-py")
     if artifact is not None:
-        _upsert_property(properties, "tapio:sbom:artifact-name", artifact.name)
-        _upsert_property(properties, "tapio:sbom:artifact-size", str(artifact.stat().st_size))
+        upsert_property(properties, "tapio:sbom:artifact-name", artifact.name)
+        upsert_property(properties, "tapio:sbom:artifact-size", str(artifact.stat().st_size))
 
     direct_names = direct_requirement_names(group.input) if group.input else None
     connect_root_dependencies(bom, component["bom-ref"], direct_names, embedded)
@@ -296,7 +236,7 @@ def generate_sbom(
         raise SbomError(f"unsupported artifact kind: {artifact_kind}")
 
     product = config.product(product_id)
-    group = config.python.requirement(group_name)
+    group = config.require_python().requirement(group_name)
     artifact_path = Path(artifact).resolve() if artifact is not None else None
     if artifact_path is not None and not artifact_path.is_file():
         raise SbomError(f"artifact does not exist: {artifact_path}")
@@ -337,4 +277,3 @@ def generate_sbom(
     finally:
         temporary.unlink(missing_ok=True)
     return output_path
-

@@ -24,11 +24,12 @@ class CompileResult:
 
 
 def _check_python(config: Config) -> None:
-    configured = tuple(int(part) for part in config.python.version.split(".")[:2])
+    python = config.require_python()
+    configured = tuple(int(part) for part in python.version.split(".")[:2])
     running = sys.version_info[:2]
     if configured != running:
         raise RequirementsError(
-            f"Python {config.python.version} is configured, but compiler runs on "
+            f"Python {python.version} is configured, but compiler runs on "
             f"{running[0]}.{running[1]}"
         )
 
@@ -69,9 +70,9 @@ def compile_requirements(
         raise ConfigError("--check and --upgrade cannot be combined")
     _check_python(config)
     groups = (
-        (config.python.requirement(group_name),)
+        (config.require_python().requirement(group_name),)
         if group_name is not None
-        else config.python.requirements
+        else config.require_python().requirements
     )
     results: list[CompileResult] = []
     stale: list[str] = []

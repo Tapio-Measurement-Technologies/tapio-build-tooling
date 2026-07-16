@@ -7,6 +7,10 @@ import os
 import sys
 
 from tapio_build_tools.config import ConfigError, load_config
+from tapio_build_tools.ecosystems.node.audit import AuditError as NodeAuditError
+from tapio_build_tools.ecosystems.node.audit import audit as audit_node
+from tapio_build_tools.ecosystems.node.sbom import SbomError as NodeSbomError
+from tapio_build_tools.ecosystems.node.sbom import generate_sbom as generate_node_sbom
 from tapio_build_tools.ecosystems.python.audit import AuditError, audit
 from tapio_build_tools.ecosystems.python.requirements import (
     RequirementsError,
@@ -49,6 +53,17 @@ def build_parser() -> argparse.ArgumentParser:
     sbom.add_argument("--artifact", help="final artifact represented by this SBOM")
     sbom.add_argument("--artifact-kind", choices=("pyinstaller",))
     sbom.add_argument("--pyinstaller-version", help="embedded PyInstaller version")
+
+    node = commands.add_parser("node", help="Node/npm ecosystem operations")
+    node_commands = node.add_subparsers(dest="node_command", required=True)
+    node_commands.add_parser("audit", help="audit the configured npm package lock")
+    node_sbom = node_commands.add_parser("sbom", help="generate CycloneDX evidence")
+    node_sbom.add_argument("--product", help="configured product ID")
+    node_sbom.add_argument("--output", required=True, help="output CycloneDX JSON path")
+    node_sbom.add_argument("--version", default=os.environ.get("GITHUB_REF_NAME", "0.0.0+local"))
+    node_sbom.add_argument("--commit-sha", help="source commit SHA")
+    node_sbom.add_argument("--platform", dest="build_platform", help="target platform")
+    node_sbom.add_argument("--build-timestamp", help="UTC evidence timestamp")
     return parser
 
 
@@ -90,7 +105,30 @@ def main(argv: list[str] | None = None) -> int:
             )
             print(f"Generated CycloneDX SBOM: {output}")
             return 0
-    except (AuditError, ConfigError, RequirementsError, SbomError, ValueError) as exc:
+        if args.command == "node" and args.node_command == "audit":
+            audit_node(config)
+            return 0
+        if args.command == "node" and args.node_command == "sbom":
+            output = generate_node_sbom(
+                config,
+                product_id=args.product,
+                output=args.output,
+                version=args.version,
+                commit_sha=args.commit_sha,
+                build_platform=args.build_platform,
+                build_timestamp=args.build_timestamp,
+            )
+            print(f"Generated CycloneDX SBOM: {output}")
+            return 0
+    except (
+        AuditError,
+        ConfigError,
+        NodeAuditError,
+        NodeSbomError,
+        RequirementsError,
+        SbomError,
+        ValueError,
+    ) as exc:
         print(f"tapio-build: error: {exc}", file=sys.stderr)
         return 2
     parser.error("unsupported command")

@@ -8,6 +8,7 @@ def validate_json(serialized_bom: str, spec_version: str) -> None:
     from cyclonedx.validation.json import JsonStrictValidator
 
     schema_versions = {
+        "1.5": SchemaVersion.V1_5,
         "1.6": SchemaVersion.V1_6,
         "1.7": SchemaVersion.V1_7,
     }
@@ -18,4 +19,3 @@ def validate_json(serialized_bom: str, spec_version: str) -> None:
     validation_error = JsonStrictValidator(schema).validate_str(serialized_bom)
     if validation_error is not None:
         raise ValueError(f"CycloneDX schema validation failed: {validation_error}")
-

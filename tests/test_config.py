@@ -98,7 +98,92 @@ lock = "requirements.txt"
         config = load_config(self.root)
         self.assertEqual(config.python.requirement("runtime").lock, self.root / "app" / "requirements.txt")
 
+    def test_loads_node_only_config(self) -> None:
+        (self.root / "package.json").write_text('{"name":"demo"}\n', encoding="utf-8")
+        (self.root / "package-lock.json").write_text(
+            '{"name":"demo","lockfileVersion":3}\n', encoding="utf-8"
+        )
+        (self.root / "build-tooling.toml").write_text(
+            """schema-version = 1
+[organization]
+name = "Tapio"
+[products.demo]
+name = "Demo"
+[ecosystems.node]
+version = "24"
+package = "package.json"
+lock = "package-lock.json"
+""",
+            encoding="utf-8",
+        )
+        config = load_config(self.root)
+        self.assertIsNone(config.python)
+        self.assertEqual(config.require_node().version, "24")
+        self.assertEqual(config.require_node().lock, self.root / "package-lock.json")
+
+    def test_loads_mixed_python_and_node_config(self) -> None:
+        (self.root / "package.json").write_text('{"name":"demo"}\n', encoding="utf-8")
+        (self.root / "package-lock.json").write_text(
+            '{"name":"demo","lockfileVersion":3}\n', encoding="utf-8"
+        )
+        mixed = BASE + """
+[ecosystems.node]
+version = "24"
+package = "package.json"
+lock = "package-lock.json"
+"""
+        config = load_config(self.project(mixed))
+        self.assertIsNotNone(config.python)
+        self.assertIsNotNone(config.node)
+
+    def test_requires_at_least_one_ecosystem(self) -> None:
+        text = BASE[: BASE.index("[ecosystems.python]")] + "[ecosystems]\n"
+        with self.assertRaisesRegex(ConfigError, "at least one ecosystem"):
+            load_config(self.project(text))
+
+    def test_rejects_invalid_node_paths(self) -> None:
+        (self.root / "package.json").write_text("{}\n", encoding="utf-8")
+        (self.root / "package-lock.json").write_text("{}\n", encoding="utf-8")
+        base = """schema-version = 1
+[organization]
+name = "Tapio"
+[products.demo]
+name = "Demo"
+[ecosystems.node]
+version = "24"
+package = "package.json"
+lock = "package-lock.json"
+"""
+        replacements = [
+            ('package = "package.json"', 'package = "../package.json"', "escapes project root"),
+            ('lock = "package-lock.json"', 'lock = "missing/package-lock.json"', "does not exist"),
+        ]
+        for old, new, message in replacements:
+            with self.subTest(message=message):
+                (self.root / "build-tooling.toml").write_text(
+                    base.replace(old, new), encoding="utf-8"
+                )
+                with self.assertRaisesRegex(ConfigError, message):
+                    load_config(self.root)
+
+    def test_requires_node_files_in_same_directory(self) -> None:
+        (self.root / "package.json").write_text("{}\n", encoding="utf-8")
+        (self.root / "nested").mkdir()
+        (self.root / "nested" / "package-lock.json").write_text("{}\n", encoding="utf-8")
+        text = """schema-version = 1
+[organization]
+name = "Tapio"
+[products.demo]
+name = "Demo"
+[ecosystems.node]
+version = "24"
+package = "package.json"
+lock = "nested/package-lock.json"
+"""
+        (self.root / "build-tooling.toml").write_text(text, encoding="utf-8")
+        with self.assertRaisesRegex(ConfigError, "share a directory"):
+            load_config(self.root)
+
 
 if __name__ == "__main__":
     unittest.main()
-

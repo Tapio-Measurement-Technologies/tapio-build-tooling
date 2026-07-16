@@ -1,0 +1,16 @@
+schema-version = 1
+
+[organization]
+name = "Tapio Measurement Technologies Oy"
+website = "https://www.tapiotechnologies.com"
+
+[products.rqp-configurator]
+name = "RQP Configurator"
+license-name = "Proprietary"
+repository = "https://github.com/Tapio-Measurement-Technologies/rqp-configurator"
+website = "https://tapio-measurement-technologies.github.io/rqp-configurator/"
+
+[ecosystems.node]
+version = "24"
+package = "package.json"
+lock = "package-lock.json"

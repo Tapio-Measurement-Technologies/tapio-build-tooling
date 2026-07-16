@@ -13,6 +13,7 @@ class ActionTests(unittest.TestCase):
             ROOT / ".github/workflows/supply-chain.yml",
             ROOT / "actions/python-supply-chain/action.yml",
             ROOT / "actions/python-release-evidence/action.yml",
+            ROOT / "actions/node-supply-chain/action.yml",
         ]
         uses = []
         for path in files:
@@ -28,6 +29,12 @@ class ActionTests(unittest.TestCase):
                 workflow = (ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
                 self.assertIn("permissions:\n  contents: read", workflow)
                 self.assertIn("persist-credentials: false", workflow)
+
+    def test_node_action_validates_before_generating_and_auditing(self) -> None:
+        action = (ROOT / "actions/node-supply-chain" / "action.yml").read_text(encoding="utf-8")
+        self.assertLess(action.index("npm ci"), action.index("node sbom"))
+        self.assertLess(action.index("node sbom"), action.index("node audit"))
+        self.assertIn("--ignore-scripts --no-audit --no-fund", action)
 
 
 if __name__ == "__main__":

@@ -1,8 +1,9 @@
 # Tapio Build Tooling
 
-Shared supply-chain tooling for Tapio products. Current adapter supports Python
-requirements, vulnerability audits, and CycloneDX SBOM evidence. Ecosystem layout
-allows later Node and PlatformIO adapters without changing Python interfaces.
+Shared supply-chain tooling for Tapio products. Current adapters support Python
+requirements and npm package locks, vulnerability audits, and CycloneDX SBOM
+evidence. Ecosystem layout allows later PlatformIO adapters without changing
+existing interfaces.
 
 ## Install
 
@@ -34,10 +35,21 @@ tapio-build --project . python sbom --group runtime --product PRODUCT --output s
 
 End-user installs remain standard `pip install -r requirements.txt`.
 
+## Node/npm commands
+
+```bash
+tapio-build --project . node audit
+tapio-build --project . node sbom --product PRODUCT --output sbom.cdx.json
+```
+
+Node evidence uses `package-lock.json` without omitting development or optional
+dependencies. `npm audit` fails on any reported vulnerability.
+
 ## GitHub Actions
 
 - `actions/python-supply-chain`: lock freshness, source SBOM, audit
 - `actions/python-release-evidence`: optional audit and artifact-bound PyInstaller SBOM
+- `actions/node-supply-chain`: npm lock validation, source SBOM, audit
 
 This repository runs the source-evidence action against itself on pushes, pull
 requests, a weekly schedule, and manual dispatch. Generated CycloneDX evidence is
