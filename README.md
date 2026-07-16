@@ -39,10 +39,13 @@ End-user installs remain standard `pip install -r requirements.txt`.
 - `actions/python-supply-chain`: lock freshness, source SBOM, audit
 - `actions/python-release-evidence`: optional audit and artifact-bound PyInstaller SBOM
 
+This repository runs the source-evidence action against itself on pushes, pull
+requests, a weekly schedule, and manual dispatch. Generated CycloneDX evidence is
+uploaded as the `tapio-build-tooling-source-sbom` workflow artifact.
+
 Pin action use to full commit SHA. Push tooling repository before consumer changes
 that reference that SHA.
 
 ## License
 
 GPL-3.0-or-later. See `LICENSE`.
-

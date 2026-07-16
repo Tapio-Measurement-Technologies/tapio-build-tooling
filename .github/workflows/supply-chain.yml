@@ -1,0 +1,35 @@
+name: Supply Chain
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches:
+      - '**'
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sbom-and-audit:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+
+      - name: Validate dependencies and generate source evidence
+        uses: Tapio-Measurement-Technologies/tapio-build-tooling/actions/python-supply-chain@e5cd53cc298dd90976e66867a3066f40f4b12d34
+        with:
+          config: build-tooling.toml
+          product: tapio-build-tooling
+          requirement-group: tooling
+          output: dist/tapio-build-tooling-${{ github.sha }}-source.cdx.json
+          platform: source
+          audit: "true"
+          upload-name: tapio-build-tooling-source-sbom

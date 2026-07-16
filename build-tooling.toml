@@ -7,6 +7,8 @@ website = "https://www.tapiotechnologies.com"
 [products.tapio-build-tooling]
 name = "Tapio Build Tooling"
 license-id = "GPL-3.0-or-later"
+repository = "https://github.com/Tapio-Measurement-Technologies/tapio-build-tooling"
+website = "https://www.tapiotechnologies.com"
 
 [ecosystems.python]
 version = "3.12"
