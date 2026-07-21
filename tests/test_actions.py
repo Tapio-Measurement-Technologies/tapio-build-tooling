@@ -1,5 +1,6 @@
 from pathlib import Path
 import re
+import tomllib
 import unittest
 
 
@@ -31,6 +32,16 @@ class ActionTests(unittest.TestCase):
                 workflow = (ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
                 self.assertIn("permissions:\n  contents: read", workflow)
                 self.assertIn("persist-credentials: false", workflow)
+
+    def test_tooling_lock_includes_no_isolation_build_requirements(self) -> None:
+        pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        build_requirements = set(pyproject["build-system"]["requires"])
+        lock_inputs = {
+            line
+            for raw_line in (ROOT / "requirements.in").read_text(encoding="utf-8").splitlines()
+            if (line := raw_line.strip()) and not line.startswith(("#", "--"))
+        }
+        self.assertLessEqual(build_requirements, lock_inputs)
 
     def test_node_action_validates_before_generating_and_auditing(self) -> None:
         action = (ROOT / "actions/node-supply-chain" / "action.yml").read_text(encoding="utf-8")
