@@ -7,7 +7,7 @@ ROOT = Path(__file__).parents[1]
 
 
 class ActionTests(unittest.TestCase):
-    def test_nested_actions_use_full_commit_shas(self) -> None:
+    def test_external_actions_use_full_commit_shas(self) -> None:
         files = [
             ROOT / ".github/workflows/ci.yml",
             ROOT / ".github/workflows/supply-chain.yml",
@@ -21,6 +21,8 @@ class ActionTests(unittest.TestCase):
         self.assertTrue(uses)
         for value in uses:
             with self.subTest(value=value):
+                if value.startswith("./"):
+                    continue
                 self.assertRegex(value, r"^[^@]+@[0-9a-f]{40}$")
 
     def test_ci_has_least_privilege_permissions(self) -> None:

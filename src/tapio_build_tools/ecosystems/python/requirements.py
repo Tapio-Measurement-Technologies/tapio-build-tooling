@@ -40,16 +40,20 @@ def _command(config: Config, group: RequirementGroup, output: Path, upgrade: boo
     command = [
         sys.executable,
         "-m",
-        "piptools",
+        "uv",
+        "pip",
         "compile",
         "--quiet",
+        "--universal",
+        "--python-version",
+        config.require_python().version,
         "--generate-hashes",
-        "--allow-unsafe",
-        "--resolver=backtracking",
-        "--strip-extras",
         "--annotation-style=split",
+        "--emit-build-options",
         "--cache-dir",
         str(Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir())) / "tapio-build-pip-cache"),
+        "--custom-compile-command",
+        "tapio-build --project . python requirements compile",
         "--output-file",
         str(output),
     ]
@@ -88,13 +92,10 @@ def compile_requirements(
         temporary = Path(temporary_name)
         if group.lock.exists():
             shutil.copy2(group.lock, temporary)
-        environment = os.environ.copy()
-        environment["CUSTOM_COMPILE_COMMAND"] = "tapio-build --project . python requirements compile"
         try:
             subprocess.run(
                 _command(config, group, temporary, upgrade),
                 cwd=config.project,
-                env=environment,
                 check=True,
             )
             generated = temporary.read_bytes()
@@ -107,7 +108,7 @@ def compile_requirements(
                 os.replace(temporary, group.lock)
                 results.append(CompileResult(group.name, "updated"))
         except subprocess.CalledProcessError as exc:
-            raise RequirementsError(f"pip-compile failed for group {group.name!r}") from exc
+            raise RequirementsError(f"uv pip compile failed for group {group.name!r}") from exc
         finally:
             temporary.unlink(missing_ok=True)
     if stale:

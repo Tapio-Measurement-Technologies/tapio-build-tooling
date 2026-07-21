@@ -35,6 +35,9 @@ tapio-build --project . python sbom --group runtime --product PRODUCT --output s
 
 End-user installs remain standard `pip install -r requirements.txt`.
 
+Requirement compilation uses uv's universal resolver so one hashed lock includes
+platform-specific dependencies for Linux, macOS, and Windows.
+
 ## Node/npm commands
 
 ```bash

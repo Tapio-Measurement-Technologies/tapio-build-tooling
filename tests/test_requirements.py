@@ -59,9 +59,13 @@ class RequirementsTests(unittest.TestCase):
         self.assertEqual((self.root / "requirements.txt").read_text(), "generated\n")
         self.assertEqual(result[0].status, "updated")
         command = run.call_args.args[0]
+        self.assertIn("--universal", command)
+        self.assertIn("--python-version", command)
         self.assertIn("--generate-hashes", command)
         self.assertIn("--annotation-style=split", command)
+        self.assertIn("--emit-build-options", command)
         self.assertIn("--cache-dir", command)
+        self.assertIn("--custom-compile-command", command)
         self.assertEqual(command[-1], "requirements.in")
 
     @patch("tapio_build_tools.ecosystems.python.requirements.subprocess.run")
