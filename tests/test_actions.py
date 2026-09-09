@@ -13,6 +13,7 @@ class ActionTests(unittest.TestCase):
             ROOT / ".github/workflows/ci.yml",
             ROOT / ".github/workflows/supply-chain.yml",
             ROOT / "actions/python-supply-chain/action.yml",
+            ROOT / "actions/python-release-checks/action.yml",
             ROOT / "actions/python-release-evidence/action.yml",
             ROOT / "actions/node-supply-chain/action.yml",
         ]
@@ -42,6 +43,19 @@ class ActionTests(unittest.TestCase):
             if (line := raw_line.strip()) and not line.startswith(("#", "--"))
         }
         self.assertLessEqual(build_requirements, lock_inputs)
+
+    def test_release_checks_validate_before_auditing(self) -> None:
+        action = (ROOT / "actions/python-release-checks" / "action.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertLess(action.index("config validate"), action.index("compile --check"))
+        self.assertLess(action.index("compile --check"), action.index("python audit"))
+
+    def test_release_checks_leave_python_to_the_calling_workflow(self) -> None:
+        action = (ROOT / "actions/python-release-checks" / "action.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("setup-python", action)
 
     def test_node_action_validates_before_generating_and_auditing(self) -> None:
         action = (ROOT / "actions/node-supply-chain" / "action.yml").read_text(encoding="utf-8")

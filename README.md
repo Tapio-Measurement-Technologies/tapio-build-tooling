@@ -51,8 +51,16 @@ dependencies. `npm audit` fails on any reported vulnerability.
 ## GitHub Actions
 
 - `actions/python-supply-chain`: lock freshness, source SBOM, audit
+- `actions/python-release-checks`: config, lock freshness, audit, no artifact
 - `actions/python-release-evidence`: optional audit and artifact-bound PyInstaller SBOM
 - `actions/node-supply-chain`: npm lock validation, source SBOM, audit
+
+A release workflow runs `python-release-checks` before it builds anything and
+`python-release-evidence` after the artifact is signed, with `audit: 'false'`
+on the evidence step. Evidence binds to a signed artifact, so it cannot run
+until signing is done; keeping the checks in a separate earlier step means a
+stale lock or a known vulnerability stops the run before the build spends time
+or the signing certificate is used.
 
 This repository runs the source-evidence action against itself on pushes, pull
 requests, a weekly schedule, and manual dispatch. Generated CycloneDX evidence is
