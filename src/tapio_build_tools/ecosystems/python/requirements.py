@@ -63,6 +63,32 @@ def _command(config: Config, group: RequirementGroup, output: Path, upgrade: boo
     return command
 
 
+_FORMAT_OPTIONS = (b"--no-binary ", b"--only-binary ")
+
+
+def _order_build_options(lock: bytes) -> bytes:
+    """Move blanket build options above the per-package exceptions.
+
+    uv emits every ``--no-binary`` line before every ``--only-binary`` line.
+    pip clears the opposing set whenever it reads ``:all:``, so an exception
+    standing above ``--only-binary :all:`` is wiped and its package is left
+    with no installable candidate. Listing the ``:all:`` options first keeps
+    the exceptions pip applies.
+    """
+    lines = lock.split(b"\n")
+    positions = [
+        index
+        for index, line in enumerate(lines)
+        if line.startswith(_FORMAT_OPTIONS)
+    ]
+    options = [lines[index] for index in positions]
+    ordered = [option for option in options if b":all:" in option]
+    ordered += [option for option in options if b":all:" not in option]
+    for position, option in zip(positions, ordered):
+        lines[position] = option
+    return b"\n".join(lines)
+
+
 def compile_requirements(
     config: Config,
     *,
@@ -98,13 +124,14 @@ def compile_requirements(
                 cwd=config.project,
                 check=True,
             )
-            generated = temporary.read_bytes()
+            generated = _order_build_options(temporary.read_bytes())
             current = group.lock.read_bytes() if group.lock.exists() else None
             if check:
                 if current != generated:
                     stale.append(group.name)
                 results.append(CompileResult(group.name, "current" if current == generated else "stale"))
             else:
+                temporary.write_bytes(generated)
                 os.replace(temporary, group.lock)
                 results.append(CompileResult(group.name, "updated"))
         except subprocess.CalledProcessError as exc:
