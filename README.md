@@ -176,7 +176,12 @@ on:
 
 with a step that writes `gh release view "$TAG" --json body --jq .body` to a
 file and passes it as `notes-file`. A version the site never published is
-reported and left alone. An empty file clears the notes.
+reported and left alone. An empty file clears the notes. The notes appear on
+the page folded, under a "Release notes" heading the visitor can open.
+
+A release event runs the workflow file of the tag's own commit, so a release
+tagged before the workflow existed never triggers it; put its notes on the
+pages with the command above instead.
 
 ### GitHub Action
 

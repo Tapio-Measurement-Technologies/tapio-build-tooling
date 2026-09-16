@@ -238,7 +238,7 @@ class PublishTests(unittest.TestCase):
         self.assertEqual(done, {"demo": True})
         # The older version is not latest: its page and the manifest, not the permanent page.
         self.assertEqual(runner.uploaded_keys()[before:], ["demo/v1.2.0/index.html", "demo/releases.json"])
-        self.assertIn("<h2>Release notes</h2>", runner.objects["demo/v1.2.0/index.html"].decode("utf-8"))
+        self.assertIn("<summary>Release notes</summary>", runner.objects["demo/v1.2.0/index.html"].decode("utf-8"))
         manifest = load_manifest(runner.objects["demo/releases.json"].decode("utf-8"))
         self.assertEqual(manifest.release("v1.2.0").notes, "## Older\n- fixed")
         self.assertIsNone(manifest.release("v1.3.0").notes)

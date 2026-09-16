@@ -182,7 +182,12 @@ def _release_body(
     parts.append(f'<ul class="downloads">\n{buttons}</ul>\n')
 
     if release.notes:
-        parts.append(f'<h2>Release notes</h2>\n<div class="notes">\n{render_markdown(release.notes)}\n</div>\n')
+        # Folded by default: the page is for downloading, the notes are there
+        # for whoever wants them, and a browser needs no script to unfold them.
+        parts.append(
+            '<details class="notes">\n<summary>Release notes</summary>\n'
+            f"{render_markdown(release.notes)}\n</details>\n"
+        )
 
     source = release.source()
     if source is not None:

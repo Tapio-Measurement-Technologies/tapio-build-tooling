@@ -138,7 +138,8 @@ class RenderTests(unittest.TestCase):
         ))
         pages = {p.key: p.html for p in render_program_pages(self.program, noted, "Example Oy")}
         for key in ("demo/index.html", "demo/v1.3.0/index.html"):
-            self.assertIn("<h2>Release notes</h2>", pages[key])
+            self.assertIn('<details class="notes">\n<summary>Release notes</summary>', pages[key])
+            self.assertNotIn("<details open", pages[key])
             self.assertIn("&lt;b&gt;bold&lt;/b&gt; is text", pages[key])
         self.assertNotIn("Release notes", pages["demo/v1.2.0/index.html"])
         self.assertNotIn("Release notes", self.pages["demo/index.html"])
