@@ -10,7 +10,7 @@ import tempfile
 
 from tapio_build_tools.config import ConfigError, load_config
 from tapio_build_tools.downloads import DownloadsError
-from tapio_build_tools.downloads.publish import publish_downloads, render_only
+from tapio_build_tools.downloads.publish import publish_downloads, publish_root_index, render_only
 from tapio_build_tools.ecosystems.node.audit import AuditError as NodeAuditError
 from tapio_build_tools.ecosystems.node.audit import audit as audit_node
 from tapio_build_tools.ecosystems.node.sbom import SbomError as NodeSbomError
@@ -84,6 +84,11 @@ def build_parser() -> argparse.ArgumentParser:
     publish.add_argument("--released", help="UTC release timestamp; now by default")
     publish.add_argument("--commit", help="source commit SHA")
     publish.add_argument("--aws-region", help="region passed to the aws CLI")
+    root = downloads_commands.add_parser("root-index", help="write the bucket-root page listing every program")
+    root.add_argument("--bucket", required=True, help="S3 bucket name")
+    root.add_argument("--output-dir", type=Path, help="where the page is written; a new temporary directory by default")
+    root.add_argument("--dry-run", action="store_true", help="read the bucket and write the page without uploading")
+    root.add_argument("--aws-region", help="region passed to the aws CLI")
     render = downloads_commands.add_parser("render", help="write a program's pages from a manifest")
     render.add_argument("--program", required=True, help="configured program ID")
     render.add_argument("--manifest", type=Path, required=True, help="releases.json to render")
@@ -168,6 +173,18 @@ def main(argv: list[str] | None = None) -> int:
                 state = "latest" if result.latest else "not latest"
                 print(f"{verb} {result.slug} {summary.version} ({state}): {result.version_url}")
             print(f"Site tree and summary: {output_dir}")
+            return 0
+        if args.command == "downloads" and args.downloads_command == "root-index":
+            output_dir = args.output_dir or Path(tempfile.mkdtemp(prefix="tapio-downloads-"))
+            publish_root_index(
+                config,
+                bucket=args.bucket,
+                output_dir=output_dir,
+                dry_run=args.dry_run,
+                aws_region=args.aws_region,
+            )
+            verb = "Would publish" if args.dry_run else "Published"
+            print(f"{verb} the root index; page and commands in {output_dir}")
             return 0
         if args.command == "downloads" and args.downloads_command == "render":
             pages = render_only(

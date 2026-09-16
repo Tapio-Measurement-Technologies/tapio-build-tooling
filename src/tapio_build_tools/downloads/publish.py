@@ -351,16 +351,9 @@ def publish_downloads(
         manifests[program.id] = manifest
 
     if root_index:
-        known = {manifest.slug: manifest for manifest in manifests.values()}
-        for prefix in client.list_prefixes():
-            if prefix in known or not prefix:
-                continue
-            fetched = scratch / f"{prefix}-{MANIFEST_FILE}"
-            if client.get(f"{prefix}/{MANIFEST_FILE}", fetched):
-                known[prefix] = load_manifest(fetched.read_text(encoding="utf-8"))
-        page = render_root_page(list(known.values()), config.organization.name, downloads.logo)
-        _write_pages(output_dir, [page])
-        client.put(output_dir / page.key, page.key, CACHE_ASK_AGAIN)
+        _publish_root_index(config, client, output_dir, scratch, dict(
+            (manifest.slug, manifest) for manifest in manifests.values()
+        ))
 
     summary = Summary(
         version=version,
@@ -379,6 +372,50 @@ def publish_downloads(
     _write_text(output_dir / "release-notes.md", _release_notes(summary, config, manifests))
     _write_text(output_dir / "aws-commands.txt", "\n".join(client.commands) + "\n")
     return summary
+
+
+def _publish_root_index(
+    config: Config,
+    client: S3Client,
+    output_dir: Path,
+    scratch: Path,
+    known: dict[str, Manifest],
+) -> Page:
+    """Write the bucket-root page listing every program that has a manifest."""
+    for prefix in client.list_prefixes():
+        if prefix in known or not prefix:
+            continue
+        fetched = scratch / f"{prefix}-{MANIFEST_FILE}"
+        if client.get(f"{prefix}/{MANIFEST_FILE}", fetched):
+            known[prefix] = load_manifest(fetched.read_text(encoding="utf-8"))
+    logo = config.downloads.logo if config.downloads is not None else None
+    page = render_root_page(list(known.values()), config.organization.name, logo)
+    _write_pages(output_dir, [page])
+    client.put(output_dir / page.key, page.key, CACHE_ASK_AGAIN)
+    return page
+
+
+def publish_root_index(
+    config: Config,
+    *,
+    bucket: str,
+    output_dir: Path,
+    dry_run: bool = False,
+    aws_region: str | None = None,
+    runner: Runner = _subprocess_runner,
+) -> Page:
+    """The bucket-root page on its own, from whatever the bucket already holds.
+
+    A release role is confined to its program's prefix and cannot write the
+    root, so this is run by hand, with credentials that can.
+    """
+    client = S3Client(bucket, runner=runner, region=aws_region, dry_run=dry_run)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    scratch = output_dir / ".fetched"
+    scratch.mkdir(exist_ok=True)
+    page = _publish_root_index(config, client, output_dir, scratch, {})
+    _write_text(output_dir / "aws-commands.txt", "\n".join(client.commands) + "\n")
+    return page
 
 
 def render_only(config: Config, *, program_id: str, manifest_path: Path, output_dir: Path) -> list[Page]:

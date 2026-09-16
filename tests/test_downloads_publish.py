@@ -6,7 +6,13 @@ import unittest
 from tapio_build_tools.config import ConfigError
 from tapio_build_tools.downloads import DownloadsError
 from tapio_build_tools.downloads.manifest import dump_manifest, load_manifest
-from tapio_build_tools.downloads.publish import CACHE_ASK_AGAIN, CACHE_FOREVER, publish_downloads, render_only
+from tapio_build_tools.downloads.publish import (
+    CACHE_ASK_AGAIN,
+    CACHE_FOREVER,
+    publish_downloads,
+    publish_root_index,
+    render_only,
+)
 from tests.downloads_support import PROPRIETARY_CONFIG, RELEASED, FakeRunner, write_project
 
 
@@ -200,6 +206,17 @@ class PublishTests(unittest.TestCase):
         with self.assertRaisesRegex(DownloadsError, "second-v1.2.0-windows.exe must match exactly one file"):
             self.publish(runner)
         self.assertEqual(runner.uploads(), [])
+
+    def test_the_root_index_can_be_written_on_its_own(self) -> None:
+        runner = FakeRunner()
+        self.publish(runner)
+        uploads_before = len(runner.uploads())
+        page = publish_root_index(self.config, bucket="bucket", output_dir=self.root / "root", runner=runner)
+        self.assertEqual(page.key, "index.html")
+        self.assertEqual(runner.uploaded_keys()[uploads_before:], ["index.html"])
+        self.assertIn('href="demo/index.html">Demo Program</a>', runner.objects["index.html"].decode("utf-8"))
+        publish_root_index(self.config, bucket="bucket", output_dir=self.root / "dry", runner=runner, dry_run=True)
+        self.assertEqual(len(runner.uploads()), uploads_before + 1)
 
     def test_render_only_rewrites_pages_from_a_manifest(self) -> None:
         runner = FakeRunner()

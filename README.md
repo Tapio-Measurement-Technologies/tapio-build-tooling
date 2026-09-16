@@ -149,7 +149,9 @@ Uploads go through the `aws` CLI with the credentials in the environment;
 manifest. The output directory receives the site tree, `summary.json`,
 `release-notes.md` (Markdown linking every file, for the GitHub release) and
 `aws-commands.txt`. `--root-index` also writes a bucket-root `index.html`
-listing every program that has a manifest.
+listing every program that has a manifest; `tapio-build downloads root-index
+--bucket BUCKET` writes that page on its own, for a hand that can write the
+root when the release roles cannot.
 
 ### GitHub Action
 
