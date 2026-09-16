@@ -39,6 +39,9 @@ class Release:
     released: str
     commit: str
     assets: tuple[Asset, ...]
+    # What the release says about itself, as Markdown; written on the GitHub
+    # release and carried over whenever it is edited.
+    notes: str | None = None
 
     def binaries(self) -> tuple[Asset, ...]:
         return tuple(asset for asset in self.assets if asset.kind == "binary")
@@ -111,9 +114,24 @@ def merge_release(manifest: Manifest, release: Release, *, force: bool = False) 
                 f"{release.version} is already published with different files;"
                 " pass --force to replace it"
             )
-        kept = replace(release, released=existing.released)
+        kept = replace(
+            release,
+            released=existing.released,
+            notes=release.notes if release.notes is not None else existing.notes,
+        )
         releases = tuple(kept if item.version == release.version else item for item in manifest.releases)
     return replace(manifest, releases=_sorted(releases))
+
+
+def set_notes(manifest: Manifest, version: str, notes: str | None) -> Manifest:
+    """*manifest* with *version*'s notes replaced; ``None`` or blank clears them."""
+    if manifest.release(version) is None:
+        raise DownloadsError(f"{version} is not published for {manifest.slug}")
+    cleaned = notes.strip() if notes and notes.strip() else None
+    releases = tuple(
+        replace(item, notes=cleaned) if item.version == version else item for item in manifest.releases
+    )
+    return replace(manifest, releases=releases)
 
 
 def load_manifest(text: str) -> Manifest:
@@ -132,6 +150,7 @@ def load_manifest(text: str) -> Manifest:
                 released=item["released"],
                 commit=item["commit"],
                 assets=tuple(Asset(**asset) for asset in item["assets"]),
+                notes=item.get("notes"),
             )
             for item in data["releases"]
         )
@@ -169,6 +188,7 @@ def dump_manifest(manifest: Manifest) -> str:
                 "released": release.released,
                 "commit": release.commit,
                 "assets": [_asset(asset) for asset in release.assets],
+                **({"notes": release.notes} if release.notes is not None else {}),
             }
             for release in manifest.releases
         ],

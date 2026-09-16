@@ -64,6 +64,22 @@ lock = "package-lock.json"
             self.assertTrue(options["dry_run"])
             self.assertEqual(options["aws_region"], "eu-north-1")
 
+    @patch("tapio_build_tools.cli.publish_notes")
+    def test_dispatches_downloads_notes(self, publish_notes) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_project(root)
+            (root / "notes.md").write_text("## Fixed\n", encoding="utf-8")
+            publish_notes.return_value = {"demo": True}
+            with redirect_stdout(StringIO()) as out:
+                result = main([
+                    "--project", str(root), "downloads", "notes", "--version", "v1.2.0",
+                    "--notes-file", str(root / "notes.md"), "--bucket", "bucket", "--output-dir", str(root / "n"),
+                ])
+            self.assertEqual(result, 0)
+            self.assertEqual(publish_notes.call_args.kwargs["notes"], "## Fixed\n")
+            self.assertIn("demo v1.2.0: notes updated", out.getvalue())
+
     def test_a_prerelease_fails_without_a_traceback(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

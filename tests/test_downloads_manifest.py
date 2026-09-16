@@ -12,6 +12,7 @@ from tapio_build_tools.downloads.manifest import (
     latest,
     load_manifest,
     merge_release,
+    set_notes,
 )
 from tapio_build_tools.downloads.versions import is_prerelease, parse_version
 from tests.downloads_support import RELEASED, write_project
@@ -82,6 +83,17 @@ class ManifestTests(unittest.TestCase):
         forced = merge_release(first, release("v1.3.0", sha="bb"), force=True)
         self.assertEqual(forced.release("v1.3.0").assets[0].sha256, "bb")
         self.assertEqual(forced.release("v1.3.0").released, RELEASED)
+
+    def test_notes_are_set_kept_and_cleared(self) -> None:
+        manifest = merge_release(self.empty, release("v1.3.0"))
+        with_notes = set_notes(manifest, "v1.3.0", "## Fixed\n- a bug\n")
+        self.assertEqual(with_notes.release("v1.3.0").notes, "## Fixed\n- a bug")
+        republished = merge_release(with_notes, release("v1.3.0"))  # a re-run carries no notes of its own
+        self.assertEqual(republished.release("v1.3.0").notes, "## Fixed\n- a bug")
+        self.assertEqual(load_manifest(dump_manifest(with_notes)), with_notes)
+        self.assertNotIn("notes", dump_manifest(set_notes(with_notes, "v1.3.0", "  \n")))
+        with self.assertRaisesRegex(DownloadsError, "v9.0.0 is not published for demo"):
+            set_notes(manifest, "v9.0.0", "x")
 
     def test_round_trips_through_json(self) -> None:
         manifest = merge_release(merge_release(self.empty, release("v1.2.0")), release("v1.3.0"))

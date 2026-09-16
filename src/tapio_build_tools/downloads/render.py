@@ -20,6 +20,7 @@ from string import Template
 
 from tapio_build_tools.config import DownloadProgram, OPERATING_SYSTEMS
 from tapio_build_tools.downloads.manifest import Asset, Manifest, Release, latest
+from tapio_build_tools.downloads.markdown import render_markdown
 
 
 ROBOTS = '<meta name="robots" content="noindex, nofollow, noarchive">\n'
@@ -179,6 +180,9 @@ def _release_body(
         for asset in release.binaries()
     )
     parts.append(f'<ul class="downloads">\n{buttons}</ul>\n')
+
+    if release.notes:
+        parts.append(f'<h2>Release notes</h2>\n<div class="notes">\n{render_markdown(release.notes)}\n</div>\n')
 
     source = release.source()
     if source is not None:

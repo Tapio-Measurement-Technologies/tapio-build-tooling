@@ -33,6 +33,7 @@ from tapio_build_tools.downloads.manifest import (
     latest,
     load_manifest,
     merge_release,
+    set_notes,
 )
 from tapio_build_tools.downloads.package import (
     Runner,
@@ -418,6 +419,59 @@ def publish_root_index(
     page = _publish_root_index(config, client, output_dir, scratch, {})
     _write_text(output_dir / "aws-commands.txt", "\n".join(client.commands) + "\n")
     return page
+
+
+def publish_notes(
+    config: Config,
+    *,
+    version: str,
+    notes: str | None,
+    bucket: str,
+    output_dir: Path,
+    programs: list[str] | None = None,
+    dry_run: bool = False,
+    aws_region: str | None = None,
+    runner: Runner = _subprocess_runner,
+) -> dict[str, bool]:
+    """Put *notes* on *version*'s pages of every program that has published it.
+
+    Returns, per program, whether the version was there to annotate. A
+    program that never published the version - a pre-release, or one older
+    than the site - is reported, not failed: the notes on the GitHub release
+    are edited for reasons of their own.
+    """
+    downloads = config.require_downloads()
+    chosen = [downloads.program(name) for name in programs] if programs else list(downloads.programs.values())
+    client = S3Client(bucket, runner=runner, region=aws_region, dry_run=dry_run)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    scratch = output_dir / ".fetched"
+    scratch.mkdir(exist_ok=True)
+    result: dict[str, bool] = {}
+    for program in chosen:
+        fetched = scratch / f"{program.slug}-{MANIFEST_FILE}"
+        if not client.get(f"{program.slug}/{MANIFEST_FILE}", fetched):
+            result[program.id] = False
+            continue
+        manifest = load_manifest(fetched.read_text(encoding="utf-8"))
+        if manifest.release(version) is None:
+            result[program.id] = False
+            continue
+        manifest = replace(set_notes(manifest, version, notes), generated=utc_now(), listed=program.listed)
+        pages = render_program_pages(program, manifest, config.organization.name, downloads.logo)
+        _write_pages(output_dir, pages)
+        manifest_key = f"{program.slug}/{MANIFEST_FILE}"
+        _write_text(output_dir / manifest_key, dump_manifest(manifest))
+        newest = latest(manifest)
+        wanted = {f"{program.slug}/{version}/index.html"}
+        if newest is not None and newest.version == version:
+            wanted.add(f"{program.slug}/index.html")
+        for page in pages:
+            if page.key in wanted:
+                client.put(output_dir / page.key, page.key, CACHE_ASK_AGAIN)
+        client.put(output_dir / manifest_key, manifest_key, CACHE_ASK_AGAIN)
+        result[program.id] = True
+    _write_text(output_dir / "aws-commands.txt", "\n".join(client.commands) + "\n")
+    return result
 
 
 def render_only(config: Config, *, program_id: str, manifest_path: Path, output_dir: Path) -> list[Page]:

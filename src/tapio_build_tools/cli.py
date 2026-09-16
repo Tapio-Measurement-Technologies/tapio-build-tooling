@@ -10,7 +10,12 @@ import tempfile
 
 from tapio_build_tools.config import ConfigError, load_config
 from tapio_build_tools.downloads import DownloadsError
-from tapio_build_tools.downloads.publish import publish_downloads, publish_root_index, render_only
+from tapio_build_tools.downloads.publish import (
+    publish_downloads,
+    publish_notes,
+    publish_root_index,
+    render_only,
+)
 from tapio_build_tools.ecosystems.node.audit import AuditError as NodeAuditError
 from tapio_build_tools.ecosystems.node.audit import audit as audit_node
 from tapio_build_tools.ecosystems.node.sbom import SbomError as NodeSbomError
@@ -89,6 +94,14 @@ def build_parser() -> argparse.ArgumentParser:
     root.add_argument("--output-dir", type=Path, help="where the page is written; a new temporary directory by default")
     root.add_argument("--dry-run", action="store_true", help="read the bucket and write the page without uploading")
     root.add_argument("--aws-region", help="region passed to the aws CLI")
+    notes = downloads_commands.add_parser("notes", help="put a release's notes on its published pages")
+    notes.add_argument("--version", default=os.environ.get("GITHUB_REF_NAME"), help="release tag")
+    notes.add_argument("--notes-file", type=Path, required=True, help="Markdown notes; an empty file clears them")
+    notes.add_argument("--bucket", required=True, help="S3 bucket name")
+    notes.add_argument("--output-dir", type=Path, help="where the pages are written; a new temporary directory by default")
+    notes.add_argument("--program", action="append", dest="programs", help="configured program ID; repeatable; all by default")
+    notes.add_argument("--dry-run", action="store_true", help="read the bucket and write the pages without uploading")
+    notes.add_argument("--aws-region", help="region passed to the aws CLI")
     render = downloads_commands.add_parser("render", help="write a program's pages from a manifest")
     render.add_argument("--program", required=True, help="configured program ID")
     render.add_argument("--manifest", type=Path, required=True, help="releases.json to render")
@@ -173,6 +186,24 @@ def main(argv: list[str] | None = None) -> int:
                 state = "latest" if result.latest else "not latest"
                 print(f"{verb} {result.slug} {summary.version} ({state}): {result.version_url}")
             print(f"Site tree and summary: {output_dir}")
+            return 0
+        if args.command == "downloads" and args.downloads_command == "notes":
+            if not args.version:
+                parser.error("--version is required outside GitHub Actions")
+            output_dir = args.output_dir or Path(tempfile.mkdtemp(prefix="tapio-downloads-"))
+            updated = publish_notes(
+                config,
+                version=args.version,
+                notes=args.notes_file.read_text(encoding="utf-8"),
+                bucket=args.bucket,
+                output_dir=output_dir,
+                programs=args.programs,
+                dry_run=args.dry_run,
+                aws_region=args.aws_region,
+            )
+            for program_id, done in updated.items():
+                state = "notes updated" if done else "not published there; nothing to do"
+                print(f"{program_id} {args.version}: {state}")
             return 0
         if args.command == "downloads" and args.downloads_command == "root-index":
             output_dir = args.output_dir or Path(tempfile.mkdtemp(prefix="tapio-downloads-"))

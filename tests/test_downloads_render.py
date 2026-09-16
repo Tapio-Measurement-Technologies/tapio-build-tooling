@@ -131,6 +131,18 @@ class RenderTests(unittest.TestCase):
         self.assertIn("Demo &lt;script&gt;", rendered)
         self.assertIn("Example &amp; Co", rendered)
 
+    def test_release_notes_are_shown_on_the_version_and_latest_pages(self) -> None:
+        noted = replace(self.manifest, releases=tuple(
+            replace(r, notes="## Fixed\n- <b>bold</b> is text\n") if r.version == "v1.3.0" else r
+            for r in self.manifest.releases
+        ))
+        pages = {p.key: p.html for p in render_program_pages(self.program, noted, "Example Oy")}
+        for key in ("demo/index.html", "demo/v1.3.0/index.html"):
+            self.assertIn("<h2>Release notes</h2>", pages[key])
+            self.assertIn("&lt;b&gt;bold&lt;/b&gt; is text", pages[key])
+        self.assertNotIn("Release notes", pages["demo/v1.2.0/index.html"])
+        self.assertNotIn("Release notes", self.pages["demo/index.html"])
+
     def test_the_logo_is_inlined_when_configured(self) -> None:
         self.assertIn('src="data:image/png;base64,', self.pages["demo/index.html"])
         plain = render_program_pages(self.program, self.manifest, "Example Oy")[0].html

@@ -17,6 +17,7 @@ class ActionTests(unittest.TestCase):
             ROOT / "actions/python-release-evidence/action.yml",
             ROOT / "actions/node-supply-chain/action.yml",
             ROOT / "actions/publish-downloads/action.yml",
+            ROOT / "actions/publish-release-notes/action.yml",
         ]
         uses = []
         for path in files:
@@ -72,11 +73,12 @@ class ActionTests(unittest.TestCase):
 
     def test_publish_downloads_carries_no_deployment_of_its_own(self) -> None:
         """The tooling is public; buckets, roles and addresses belong to the consumer."""
-        action = (ROOT / "actions/publish-downloads" / "action.yml").read_text(encoding="utf-8")
-        for literal in ["arn:aws:", "amazonaws.com", "s3://", "tapiotechnologies"]:
-            with self.subTest(literal=literal):
-                self.assertNotIn(literal, action)
-        self.assertIsNone(re.search(r"[\w.-]+@[\w-]+\.\w+", action), "an email address in the action")
+        for name in ["publish-downloads", "publish-release-notes"]:
+            action = (ROOT / "actions" / name / "action.yml").read_text(encoding="utf-8")
+            for literal in ["arn:aws:", "amazonaws.com", "s3://", "tapiotechnologies"]:
+                with self.subTest(action=name, literal=literal):
+                    self.assertNotIn(literal, action)
+            self.assertIsNone(re.search(r"[\w.-]+@[\w-]+\.\w+", action), f"an email address in {name}")
 
 
 if __name__ == "__main__":

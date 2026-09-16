@@ -55,6 +55,7 @@ dependencies. `npm audit` fails on any reported vulnerability.
 - `actions/python-release-evidence`: optional audit and artifact-bound PyInstaller SBOM
 - `actions/node-supply-chain`: npm lock validation, source SBOM, audit
 - `actions/publish-downloads`: package a release, publish its download pages to S3
+- `actions/publish-release-notes`: put a GitHub release's notes on its download pages
 
 A release workflow runs `python-release-checks` before it builds anything and
 `python-release-evidence` after the artifact is signed, with `audit: 'false'`
@@ -153,6 +154,29 @@ manifest. The output directory receives the site tree, `summary.json`,
 listing every program that has a manifest; `tapio-build downloads root-index
 --bucket BUCKET` writes that page on its own, for a hand that can write the
 root when the release roles cannot.
+
+### Release notes
+
+The notes written on a GitHub release can be shown on the version's page:
+
+```bash
+tapio-build --project . downloads notes --version v1.4.0 --notes-file body.md --bucket BUCKET
+```
+
+The Markdown is rendered by a small converter - headings, paragraphs, lists,
+fenced code, emphasis, inline code and `http(s)`/`mailto` links - with every
+character escaped first, so markup in the notes is shown rather than run. The
+`publish-release-notes` action wraps it for a workflow on the `release` event:
+
+```yaml
+on:
+  release:
+    types: [published, edited]
+```
+
+with a step that writes `gh release view "$TAG" --json body --jq .body` to a
+file and passes it as `notes-file`. A version the site never published is
+reported and left alone. An empty file clears the notes.
 
 ### GitHub Action
 

@@ -10,6 +10,7 @@ from tapio_build_tools.downloads.publish import (
     CACHE_ASK_AGAIN,
     CACHE_FOREVER,
     publish_downloads,
+    publish_notes,
     publish_root_index,
     render_only,
 )
@@ -224,6 +225,42 @@ class PublishTests(unittest.TestCase):
         self.assertIn('href="demo/index.html">Demo Program</a>', runner.objects["index.html"].decode("utf-8"))
         publish_root_index(self.config, bucket="bucket", output_dir=self.root / "dry", runner=runner, dry_run=True)
         self.assertEqual(len(runner.uploads()), uploads_before + 1)
+
+    def test_notes_reach_the_pages_of_a_published_version_only(self) -> None:
+        runner = FakeRunner()
+        self.publish(runner, version="v1.2.0")
+        write_project(self.root, version="v1.3.0")
+        self.publish(runner, version="v1.3.0")
+        before = len(runner.uploads())
+
+        done = publish_notes(self.config, version="v1.2.0", notes="## Older\n- fixed", bucket="bucket",
+                             output_dir=self.root / "notes", runner=runner)
+        self.assertEqual(done, {"demo": True})
+        # The older version is not latest: its page and the manifest, not the permanent page.
+        self.assertEqual(runner.uploaded_keys()[before:], ["demo/v1.2.0/index.html", "demo/releases.json"])
+        self.assertIn("<h2>Release notes</h2>", runner.objects["demo/v1.2.0/index.html"].decode("utf-8"))
+        manifest = load_manifest(runner.objects["demo/releases.json"].decode("utf-8"))
+        self.assertEqual(manifest.release("v1.2.0").notes, "## Older\n- fixed")
+        self.assertIsNone(manifest.release("v1.3.0").notes)
+
+        before = len(runner.uploads())
+        publish_notes(self.config, version="v1.3.0", notes="Newest", bucket="bucket",
+                      output_dir=self.root / "notes2", runner=runner)
+        self.assertEqual(runner.uploaded_keys()[before:], ["demo/index.html", "demo/v1.3.0/index.html", "demo/releases.json"])
+        self.assertIn("Newest", runner.objects["demo/index.html"].decode("utf-8"))
+
+        before = len(runner.uploads())
+        self.assertEqual(
+            publish_notes(self.config, version="v0.9.0", notes="Never published", bucket="bucket",
+                          output_dir=self.root / "notes3", runner=runner),
+            {"demo": False},
+        )
+        self.assertEqual(len(runner.uploads()), before)
+        self.assertEqual(
+            publish_notes(self.config, version="v1.3.0", notes="x", bucket="empty-bucket",
+                          output_dir=self.root / "notes4", runner=FakeRunner()),
+            {"demo": False},
+        )
 
     def test_render_only_rewrites_pages_from_a_manifest(self) -> None:
         runner = FakeRunner()
