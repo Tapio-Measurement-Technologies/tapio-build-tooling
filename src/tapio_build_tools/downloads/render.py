@@ -131,6 +131,13 @@ def _paragraphs(text: str | None) -> str:
     return "".join(f'<p class="note">{_escape(block)}</p>\n' for block in blocks if block)
 
 
+def _fold(kind: str, title: str, body: str) -> str:
+    return (
+        f'<details class="fold {kind}">\n<summary>{_escape(title)}</summary>\n'
+        f'<div class="fold-body">\n{body}\n</div>\n</details>\n'
+    )
+
+
 def _asset_rows(page_key: str, release: Release) -> str:
     rows = []
     for asset in release.assets:
@@ -180,37 +187,35 @@ def _release_body(
         for asset in release.binaries()
     )
     parts.append(f'<ul class="downloads">\n{buttons}</ul>\n')
+    parts.append(_paragraphs(program.notes))
 
+    # Folded by default: the page is for downloading; the rest is there for
+    # whoever wants it, and a browser needs no script to unfold it.
     if release.notes:
-        # Folded by default: the page is for downloading, the notes are there
-        # for whoever wants them, and a browser needs no script to unfold them.
-        parts.append(
-            '<details class="notes">\n<summary>Release notes</summary>\n'
-            f"{render_markdown(release.notes)}\n</details>\n"
-        )
+        parts.append(_fold("notes", "Release notes", render_markdown(release.notes)))
 
     source = release.source()
     if source is not None:
         licence = manifest.license_id or "open source"
-        parts.append(
-            "<h2>Source code</h2>\n"
-            f'<p class="note">{_escape(program.name)} is free software under the {_escape(licence)} '
+        parts.append(_fold(
+            "source",
+            "Source code",
+            f'<p>{_escape(program.name)} is free software under the {_escape(licence)} '
             "licence. The complete corresponding source code of this version is offered here, "
             "next to the program, for as long as the program itself is. "
             f'You can also request it from <a href="mailto:{_escape(program.contact)}">'
             f"{_escape(program.contact)}</a>.</p>\n"
             f'<p><a class="download secondary" href="{_escape(_href(page_key, source.key))}">'
-            f"Source code ({_escape(licence)})</a></p>\n"
-        )
+            f"Source code ({_escape(licence)})</a></p>",
+        ))
 
-    parts.append("<h2>Files</h2>\n")
-    parts.append(_asset_rows(page_key, release))
+    files = _asset_rows(page_key, release)
     if release.sboms():
-        parts.append(
-            '<p class="note muted">The SBOM lists every third-party component inside the '
+        files += (
+            '<p class="muted">The SBOM lists every third-party component inside the '
             "program, in CycloneDX form.</p>\n"
         )
-    parts.append(_paragraphs(program.notes))
+    parts.append(_fold("files", "Files and checksums", files))
     parts.append(
         f'<p class="note">Questions and licences: <a href="mailto:{_escape(program.contact)}">'
         f"{_escape(program.contact)}</a>.</p>\n"

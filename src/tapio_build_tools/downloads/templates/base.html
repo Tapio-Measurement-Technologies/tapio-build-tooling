@@ -96,12 +96,40 @@ $robots<title>$title</title>
   tbody tr:last-child td { border-bottom: 0; }
   thead th { background: var(--surface-sunken); }
   .mono { font-family: var(--mono); overflow-wrap: anywhere; }
-  details.notes { margin: 32px 0 0; }
-  .notes summary { cursor: pointer; font-size: 17px; line-height: 24px; font-weight: 600; }
-  .notes summary:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
-  .notes[open] summary { margin-bottom: 8px; }
+  details.fold { margin: 16px 0 0; border: 1px solid var(--border); border-radius: 4px; }
+  .downloads + details.fold, .note + details.fold { margin-top: 24px; }
+  .fold summary {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    list-style: none;
+    cursor: pointer;
+    font-weight: 600;
+    border-radius: 4px;
+  }
+  .fold summary::-webkit-details-marker { display: none; }
+  .fold summary::before {
+    content: "";
+    flex: none;
+    width: 7px;
+    height: 7px;
+    margin: 0 4px 0 2px;
+    border-right: 2px solid var(--ink-secondary);
+    border-bottom: 2px solid var(--ink-secondary);
+    transform: rotate(-45deg);
+    transition: transform 0.15s;
+  }
+  .fold[open] summary::before { transform: rotate(45deg); margin-top: -4px; }
+  .fold summary:hover { background: var(--surface-sunken); }
+  .fold summary:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
+  .fold[open] summary { border-bottom: 1px solid var(--border); border-radius: 4px 4px 0 0; }
+  .fold-body { padding: 4px 14px 14px; }
+  .fold-body > :first-child { margin-top: 8px; }
+  .fold-body table { margin: 0; }
+  .fold-body .download { margin-top: 4px; }
   .notes h3, .notes h4 { margin: 16px 0 4px; font-size: 15px; line-height: 22px; font-weight: 600; }
-  .notes p { margin: 8px 0; }
+  .notes p, .fold-body p { margin: 8px 0; }
   .notes ul, .notes ol { margin: 8px 0; padding-left: 22px; }
   .notes li { margin: 2px 0; }
   .notes code { font: 13px/19px var(--mono); }

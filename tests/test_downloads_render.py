@@ -79,6 +79,19 @@ class RenderTests(unittest.TestCase):
         self.assertNotIn("Source code", without)
         self.assertNotIn("SBOM", without)
 
+    def test_the_body_reads_buttons_notes_then_folds(self) -> None:
+        noted = replace(self.manifest, releases=tuple(
+            replace(r, notes="Fixed things") if r.version == "v1.2.0" else r for r in self.manifest.releases
+        ))
+        page = {p.key: p.html for p in render_program_pages(self.program, noted, "Example Oy")}["demo/v1.2.0/index.html"]
+        order = [page.index(marker) for marker in (
+            '<ul class="downloads">', "Unzip and run.", "<summary>Release notes</summary>",
+            "<summary>Source code</summary>", "<summary>Files and checksums</summary>", "Questions and licences",
+        )]
+        self.assertEqual(order, sorted(order))
+        self.assertEqual(page.count("<details "), 3)
+        self.assertNotIn("<details open", page)
+
     def test_the_versions_page_lists_newest_first(self) -> None:
         page = self.pages["demo/versions/index.html"]
         self.assertLess(page.index("v1.3.0"), page.index("v1.2.0"))
@@ -138,7 +151,7 @@ class RenderTests(unittest.TestCase):
         ))
         pages = {p.key: p.html for p in render_program_pages(self.program, noted, "Example Oy")}
         for key in ("demo/index.html", "demo/v1.3.0/index.html"):
-            self.assertIn('<details class="notes">\n<summary>Release notes</summary>', pages[key])
+            self.assertIn('<details class="fold notes">\n<summary>Release notes</summary>', pages[key])
             self.assertNotIn("<details open", pages[key])
             self.assertIn("&lt;b&gt;bold&lt;/b&gt; is text", pages[key])
         self.assertNotIn("Release notes", pages["demo/v1.2.0/index.html"])
