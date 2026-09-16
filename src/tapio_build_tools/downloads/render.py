@@ -51,6 +51,31 @@ SCRIPT = """\
 """
 
 
+# One glyph per operating system, drawn inline so the page still loads
+# nothing from anywhere else. They are generic shapes - window panes, a
+# penguin, a laptop - not the vendors' marks.
+OS_ICONS = {
+    "windows": (
+        '<svg class="icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">'
+        '<path fill="currentColor" d="M3 5.6 10.6 4.5v7H3zM11.6 4.3 21 3v8.5h-9.4z'
+        'M3 12.5h7.6v7L3 18.4zM11.6 12.5H21V21l-9.4-1.3z"/></svg>'
+    ),
+    "linux": (
+        '<svg class="icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">'
+        '<path fill="currentColor" fill-rule="evenodd" d="M12 1.5c-3 0-4.6 2.4-4.6 5.4 0 1.6-.6 2.8-1.4'
+        ' 4.4C5 13.4 4 15.4 4 17.6 4 20.6 7.4 22.5 12 22.5s8-1.9 8-4.9c0-2.2-1-4.2-2-6.3-.8-1.6-1.4-2.8'
+        '-1.4-4.4 0-3-1.6-5.4-4.6-5.4zm-1.8 4.2a1 1 0 1 1 0 2 1 1 0 0 1 0-2zm3.6 0a1 1 0 1 1 0 2 1 1 0 0'
+        ' 1 0-2zM12 8.2c.9 0 1.6.5 1.6 1.1S12.9 10.6 12 10.6s-1.6-.7-1.6-1.3.7-1.1 1.6-1.1zm0 3.4c2.4 0'
+        ' 4.2 2.2 4.2 5 0 2.1-1.8 3.7-4.2 3.7S7.8 18.7 7.8 16.6c0-2.8 1.8-5 4.2-5z"/></svg>'
+    ),
+    "macos": (
+        '<svg class="icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">'
+        '<path fill="currentColor" d="M4 5.5A1.5 1.5 0 0 1 5.5 4h13A1.5 1.5 0 0 1 20 5.5V16H4z'
+        'M6 6v8h12V6zM2 17.5h20v.7c0 1-.8 1.8-1.8 1.8H3.8c-1 0-1.8-.8-1.8-1.8z"/></svg>'
+    ),
+}
+
+
 @dataclass(frozen=True)
 class Page:
     key: str
@@ -149,7 +174,8 @@ def _release_body(
         )
     buttons = "".join(
         f'  <li><a class="download" data-os="{_escape(asset.os or "")}" '
-        f'href="{_escape(_href(page_key, asset.key))}">{_escape(_button_label(asset, release))}</a></li>\n'
+        f'href="{_escape(_href(page_key, asset.key))}">{OS_ICONS.get(asset.os or "", "")}'
+        f"<span>{_escape(_button_label(asset, release))}</span></a></li>\n"
         for asset in release.binaries()
     )
     parts.append(f'<ul class="downloads">\n{buttons}</ul>\n')

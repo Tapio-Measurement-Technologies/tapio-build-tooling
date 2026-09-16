@@ -50,8 +50,10 @@ class RenderTests(unittest.TestCase):
         page = self.pages["demo/index.html"]
         self.assertIn("<h1>Demo Program</h1>", page)
         self.assertIn("Version v1.3.0, released 16 September 2026", page)
-        self.assertIn('data-os="windows" href="v1.3.0/demo-v1.3.0-windows-x86_64.zip">Download for Windows</a>', page)
-        self.assertIn('data-os="linux" href="v1.3.0/demo-v1.3.0-linux-x86_64.tar.gz">Download for Linux</a>', page)
+        self.assertIn('data-os="windows" href="v1.3.0/demo-v1.3.0-windows-x86_64.zip"><svg class="icon"', page)
+        self.assertIn('<span>Download for Windows</span></a>', page)
+        self.assertIn('data-os="linux" href="v1.3.0/demo-v1.3.0-linux-x86_64.tar.gz"><svg class="icon"', page)
+        self.assertIn('<span>Download for Linux</span></a>', page)
         self.assertIn("3.0 MB", page)
         self.assertIn("ab" * 32, page)
         self.assertIn('href="versions/index.html">All versions</a>', page)
