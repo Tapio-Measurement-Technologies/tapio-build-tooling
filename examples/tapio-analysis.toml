@@ -16,3 +16,22 @@ version = "3.12"
 name = "combined"
 lock = "requirements.txt"
 
+
+# A GPL program: the tagged source tree is published next to the binary, and
+# the page carries the written offer. The signed executable is served as it is.
+[downloads]
+contact = "downloads@example.com"
+logo = "src/assets/Tapio_Logo_300dpi.png"
+
+[downloads.programs.tapio-analysis]
+slug = "tapio-analysis"
+name = "Tapio Analysis"
+source-package = true
+indexable = true
+notes = "There is nothing to install: save the program anywhere and run it."
+
+[[downloads.programs.tapio-analysis.assets]]
+os = "windows"
+glob = "dist/tapio-analysis-${version}.exe"
+archive = "none"
+sbom = "dist/tapio-analysis-${version}.cdx.json"

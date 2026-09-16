@@ -1,0 +1,69 @@
+schema-version = 1
+
+[organization]
+name = "Tapio Measurement Technologies Oy"
+website = "https://www.tapiotechnologies.com"
+
+[products.tapio-papeye]
+name = "Tapio PapEye"
+license-name = "Proprietary"
+repository = "https://github.com/Tapio-Measurement-Technologies/tapio-papeye"
+website = "https://www.tapiotechnologies.com"
+
+[ecosystems.python]
+version = "3.12"
+
+[[ecosystems.python.requirements]]
+name = "runtime"
+input = "requirements.in"
+lock = "requirements.txt"
+
+[[ecosystems.python.requirements]]
+name = "build"
+input = "requirements-build.in"
+lock = "requirements-build.txt"
+
+# One product, three programs: PapEye ships one executable per measurement,
+# and each gets a download page and a prefix of its own.
+[downloads]
+contact = "downloads@example.com"
+logo = "src/assets/tapio_logo.png"
+
+[downloads.programs.printuniformity]
+slug = "tapio-papeye-printuniformity"
+name = "PapEye Print Uniformity"
+notes = "Unzip the file and run the program inside; there is nothing to install."
+
+[[downloads.programs.printuniformity.assets]]
+os = "windows"
+glob = "dist/papeye-printuniformity-${version}-windows.exe"
+
+[[downloads.programs.printuniformity.assets]]
+os = "linux"
+glob = "dist/papeye-printuniformity-${version}-linux"
+
+[downloads.programs.dirtcount]
+slug = "tapio-papeye-dirtcount"
+name = "PapEye Dirt Count"
+notes = "Unzip the file and run the program inside; there is nothing to install."
+
+[[downloads.programs.dirtcount.assets]]
+os = "windows"
+glob = "dist/papeye-dirtcount-${version}-windows.exe"
+
+[[downloads.programs.dirtcount.assets]]
+os = "linux"
+glob = "dist/papeye-dirtcount-${version}-linux"
+
+[downloads.programs.linequality]
+slug = "tapio-papeye-linequality"
+name = "PapEye Line Quality"
+notes = "Unzip the file and run the program inside; there is nothing to install."
+
+[[downloads.programs.linequality.assets]]
+os = "windows"
+glob = "dist/papeye-linequality-${version}-windows.exe"
+
+[[downloads.programs.linequality.assets]]
+os = "linux"
+glob = "dist/papeye-linequality-${version}-linux"

@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import argparse
 import os
+from pathlib import Path
 import sys
+import tempfile
 
 from tapio_build_tools.config import ConfigError, load_config
+from tapio_build_tools.downloads import DownloadsError
+from tapio_build_tools.downloads.publish import publish_downloads, render_only
 from tapio_build_tools.ecosystems.node.audit import AuditError as NodeAuditError
 from tapio_build_tools.ecosystems.node.audit import audit as audit_node
 from tapio_build_tools.ecosystems.node.sbom import SbomError as NodeSbomError
@@ -64,6 +68,26 @@ def build_parser() -> argparse.ArgumentParser:
     node_sbom.add_argument("--commit-sha", help="source commit SHA")
     node_sbom.add_argument("--platform", dest="build_platform", help="target platform")
     node_sbom.add_argument("--build-timestamp", help="UTC evidence timestamp")
+
+    downloads = commands.add_parser("downloads", help="release download site operations")
+    downloads_commands = downloads.add_subparsers(dest="downloads_command", required=True)
+    publish = downloads_commands.add_parser("publish", help="publish a release to the download bucket")
+    publish.add_argument("--version", default=os.environ.get("GITHUB_REF_NAME"), help="release tag")
+    publish.add_argument("--bucket", required=True, help="S3 bucket name")
+    publish.add_argument("--base-url", required=True, help="public URL of the bucket root")
+    publish.add_argument("--output-dir", type=Path, help="where the site tree is written; a new temporary directory by default")
+    publish.add_argument("--program", action="append", dest="programs", help="configured program ID; repeatable; all by default")
+    publish.add_argument("--dry-run", action="store_true", help="write the site tree and list the uploads without uploading")
+    publish.add_argument("--force", action="store_true", help="replace a version already published with different files")
+    publish.add_argument("--root-index", action="store_true", help="also write the bucket root index of all programs")
+    publish.add_argument("--existing-manifest", type=Path, help="use this releases.json instead of fetching the bucket's")
+    publish.add_argument("--released", help="UTC release timestamp; now by default")
+    publish.add_argument("--commit", help="source commit SHA")
+    publish.add_argument("--aws-region", help="region passed to the aws CLI")
+    render = downloads_commands.add_parser("render", help="write a program's pages from a manifest")
+    render.add_argument("--program", required=True, help="configured program ID")
+    render.add_argument("--manifest", type=Path, required=True, help="releases.json to render")
+    render.add_argument("--output-dir", type=Path, required=True, help="where the pages are written")
     return parser
 
 
@@ -120,9 +144,44 @@ def main(argv: list[str] | None = None) -> int:
             )
             print(f"Generated CycloneDX SBOM: {output}")
             return 0
+        if args.command == "downloads" and args.downloads_command == "publish":
+            if not args.version:
+                parser.error("--version is required outside GitHub Actions")
+            output_dir = args.output_dir or Path(tempfile.mkdtemp(prefix="tapio-downloads-"))
+            summary = publish_downloads(
+                config,
+                version=args.version,
+                bucket=args.bucket,
+                base_url=args.base_url,
+                output_dir=output_dir,
+                programs=args.programs,
+                dry_run=args.dry_run,
+                force=args.force,
+                root_index=args.root_index,
+                existing_manifest=args.existing_manifest,
+                released=args.released,
+                commit=args.commit,
+                aws_region=args.aws_region,
+            )
+            verb = "Would publish" if args.dry_run else "Published"
+            for result in summary.programs.values():
+                state = "latest" if result.latest else "not latest"
+                print(f"{verb} {result.slug} {summary.version} ({state}): {result.version_url}")
+            print(f"Site tree and summary: {output_dir}")
+            return 0
+        if args.command == "downloads" and args.downloads_command == "render":
+            pages = render_only(
+                config,
+                program_id=args.program,
+                manifest_path=args.manifest,
+                output_dir=args.output_dir,
+            )
+            print(f"Rendered {len(pages)} page(s) into {args.output_dir}")
+            return 0
     except (
         AuditError,
         ConfigError,
+        DownloadsError,
         NodeAuditError,
         NodeSbomError,
         RequirementsError,
