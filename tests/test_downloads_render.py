@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 import re
 import tempfile
@@ -141,11 +142,16 @@ class RenderTests(unittest.TestCase):
         self.assertIn('querySelector(".downloads")', page)
         self.assertNotIn("<script", self.pages["demo/versions/index.html"])
 
-    def test_the_root_page_lists_every_program(self) -> None:
+    def test_the_root_page_lists_every_listed_program(self) -> None:
         other = empty_manifest(self.program, RELEASED)
-        page = render_root_page([self.manifest, other], "Example Oy").html
+        hidden = replace(self.manifest, slug="hidden", name="Hidden Program", listed=False)
+        page = render_root_page([self.manifest, other, hidden], "Example Oy").html
+        self.assertIn("<title>Downloads</title>", page)
+        self.assertIn("<h1>Downloads</h1>", page)
+        self.assertIn('<p class="eyebrow">Example Oy</p>', page)
         self.assertIn('<a href="demo/index.html">Demo Program</a></td><td>v1.3.0</td>', page)
-        self.assertEqual(page.count("<tr>"), 2)  # header row plus one program; an empty manifest is left out
+        self.assertNotIn("Hidden Program", page)
+        self.assertEqual(page.count("<tr>"), 2)  # header row plus one program; empty and unlisted are left out
 
 
 if __name__ == "__main__":

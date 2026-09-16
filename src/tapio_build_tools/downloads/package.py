@@ -139,7 +139,9 @@ def git_source_archive(
 
     This is the corresponding source a copyleft licence asks to be offered
     next to the binary: the tagged tree holds the licence, the pinned
-    requirements and the workflow that built it.
+    requirements and the workflow that built it. What is left out - test
+    data, say - is the checkout's .gitattributes export-ignore, not the tag's,
+    so publishing an older tag from a newer checkout leaves out the same.
     """
     try:
         _run(runner, ["git", "-C", str(project), "rev-parse", "--verify", "--quiet", f"refs/tags/{tag}^{{commit}}"])
@@ -152,7 +154,7 @@ def git_source_archive(
     _run(
         runner,
         [
-            "git", "-C", str(project), "archive", "--format=tar.gz",
+            "git", "-C", str(project), "archive", "--format=tar.gz", "--worktree-attributes",
             f"--prefix={prefix}/", "-o", str(target), tag,
         ],
     )

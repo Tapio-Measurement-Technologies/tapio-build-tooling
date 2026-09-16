@@ -79,7 +79,7 @@ class PackageTests(unittest.TestCase):
             runner.commands,
             [
                 ["git", "-C", str(self.root), "rev-parse", "--verify", "--quiet", "refs/tags/v1.2.0^{commit}"],
-                ["git", "-C", str(self.root), "archive", "--format=tar.gz", "--prefix=demo-v1.2.0/", "-o", str(target), "v1.2.0"],
+                ["git", "-C", str(self.root), "archive", "--format=tar.gz", "--worktree-attributes", "--prefix=demo-v1.2.0/", "-o", str(target), "v1.2.0"],
             ],
         )
 

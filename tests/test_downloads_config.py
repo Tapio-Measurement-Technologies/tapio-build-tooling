@@ -27,6 +27,9 @@ class DownloadsConfigTests(unittest.TestCase):
         self.assertEqual(program.contact, "downloads@example.com")
         self.assertTrue(program.source_package)
         self.assertFalse(program.indexable)
+        self.assertTrue(program.listed)
+        unlisted = self.load(GPL_CONFIG.replace('slug = "demo"', 'slug = "demo"\nlisted = false'))
+        self.assertFalse(unlisted.require_downloads().program("demo").listed)
         windows, linux = program.assets
         self.assertEqual((windows.os, windows.arch, windows.archive), ("windows", "x86_64", "zip"))
         self.assertEqual((linux.os, linux.archive, linux.sbom), ("linux", "tar.gz", None))

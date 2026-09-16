@@ -91,6 +91,8 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual(data["slug"], "demo")
         self.assertNotIn("os", json.dumps(data["releases"][0]["assets"][0]) and "")  # no null keys written
         self.assertEqual(load_manifest(text), manifest)
+        self.assertTrue(data["listed"])
+        self.assertTrue(load_manifest(text.replace('"listed": true,', "")).listed)  # older manifests
 
     def test_rejects_manifests_it_does_not_understand(self) -> None:
         cases = [

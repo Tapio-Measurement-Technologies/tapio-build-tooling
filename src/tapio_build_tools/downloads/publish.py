@@ -313,7 +313,9 @@ def publish_downloads(
         release = _package_release(
             config, program, version, base_url, output_dir, released=stamp, commit=commit, runner=runner
         )
-        manifest = replace(merge_release(current, release, force=force), generated=released)
+        manifest = replace(
+            merge_release(current, release, force=force), generated=released, listed=program.listed
+        )
         pages = render_program_pages(program, manifest, config.organization.name, downloads.logo)
         _write_pages(output_dir, pages)
         _write_text(output_dir / program.slug / MANIFEST_FILE, dump_manifest(manifest))
@@ -425,6 +427,7 @@ def render_only(config: Config, *, program_id: str, manifest_path: Path, output_
     manifest = load_manifest(manifest_path.read_text(encoding="utf-8"))
     if manifest.slug != program.slug:
         raise DownloadsError(f"{manifest_path} belongs to {manifest.slug}, not {program.slug}")
+    manifest = replace(manifest, listed=program.listed)
     pages = render_program_pages(program, manifest, config.organization.name, downloads.logo)
     _write_pages(output_dir, pages)
     _write_text(output_dir / program.slug / MANIFEST_FILE, dump_manifest(manifest))

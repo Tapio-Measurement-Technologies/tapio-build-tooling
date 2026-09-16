@@ -57,6 +57,9 @@ class Manifest:
     license_id: str | None
     generated: str
     releases: tuple[Release, ...]
+    # Whether the bucket-root page names the program. The pages of one that
+    # is not listed are still there for anyone given the link.
+    listed: bool = True
 
     def release(self, version: str) -> Release | None:
         return next((release for release in self.releases if release.version == version), None)
@@ -69,6 +72,7 @@ def empty_manifest(program: DownloadProgram, generated: str) -> Manifest:
         license_id=program.product.license_id,
         generated=generated,
         releases=(),
+        listed=program.listed,
     )
 
 
@@ -137,6 +141,7 @@ def load_manifest(text: str) -> Manifest:
             license_id=data.get("license-id"),
             generated=data["generated"],
             releases=_sorted(releases),
+            listed=bool(data.get("listed", True)),
         )
     except (KeyError, TypeError) as exc:
         raise DownloadsError(f"releases.json is missing or misnames a field: {exc}") from exc
@@ -157,6 +162,7 @@ def dump_manifest(manifest: Manifest) -> str:
         "name": manifest.name,
         "license-id": manifest.license_id,
         "generated": manifest.generated,
+        "listed": manifest.listed,
         "releases": [
             {
                 "version": release.version,

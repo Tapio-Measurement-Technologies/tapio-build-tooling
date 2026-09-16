@@ -116,6 +116,7 @@ name = "Example App"
 notes = "Nothing to install: save the program anywhere and run it."
 source-package = true                # git archive of the tag, offered on the page
 indexable = true                     # let search engines index the pages
+listed = true                        # name the program on the bucket-root index page
 
 [[downloads.programs.app.assets]]
 os = "windows"                       # windows | linux | macos

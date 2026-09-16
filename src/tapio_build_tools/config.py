@@ -102,6 +102,7 @@ class DownloadProgram:
     notes: str | None = None
     indexable: bool = False
     source_package: bool = False
+    listed: bool = True
 
 
 @dataclass(frozen=True)
@@ -413,7 +414,7 @@ def _load_downloads(project: Path, raw: Any, products: dict[str, Product]) -> Do
     programs: dict[str, DownloadProgram] = {}
     slugs: dict[str, str] = {}
     program_keys = {
-        "product", "slug", "name", "notes", "contact", "indexable", "source-package", "assets"
+        "product", "slug", "name", "notes", "contact", "indexable", "source-package", "listed", "assets",
     }
     for program_id, raw_program in programs_data.items():
         label = f"downloads.programs.{program_id}"
@@ -469,5 +470,6 @@ def _load_downloads(project: Path, raw: Any, products: dict[str, Product]) -> Do
             notes=_optional_string(program_data, "notes", label),
             indexable=_optional_bool(program_data, "indexable", label, False),
             source_package=source_package,
+            listed=_optional_bool(program_data, "listed", label, True),
         )
     return Downloads(programs=programs, logo=logo)

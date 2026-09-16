@@ -13,7 +13,7 @@ from tapio_build_tools.downloads.publish import (
     publish_root_index,
     render_only,
 )
-from tests.downloads_support import PROPRIETARY_CONFIG, RELEASED, FakeRunner, write_project
+from tests.downloads_support import GPL_CONFIG, PROPRIETARY_CONFIG, RELEASED, FakeRunner, write_project
 
 
 class PublishTests(unittest.TestCase):
@@ -179,6 +179,13 @@ class PublishTests(unittest.TestCase):
         self.assertIn('href="demo/index.html">Demo Program</a>', page)
         self.assertIn('href="other/index.html">Other Program</a>', page)
         self.assertNotIn("stray", page)
+        # A program that is not listed keeps its pages but leaves the root page.
+        self.config = write_project(self.root, GPL_CONFIG.replace('slug = "demo"', 'slug = "demo"\nlisted = false'))
+        self.publish(runner, root_index=True)
+        root = runner.objects["index.html"].decode("utf-8")
+        self.assertNotIn("Demo Program", root)
+        self.assertIn("Other Program", root)
+        self.assertIn("Demo Program", runner.objects["demo/index.html"].decode("utf-8"))
         self.publish(runner)
         self.assertNotIn("index.html", runner.uploaded_keys()[-8:])
 

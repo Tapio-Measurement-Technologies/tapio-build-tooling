@@ -327,7 +327,7 @@ def render_root_page(manifests: list[Manifest], organization: str, logo: Path | 
     rows = []
     for manifest in sorted(manifests, key=lambda item: item.name.lower()):
         newest = latest(manifest)
-        if newest is None:
+        if newest is None or not manifest.listed:
             continue
         rows.append(
             "<tr>"
@@ -337,8 +337,8 @@ def render_root_page(manifests: list[Manifest], organization: str, logo: Path | 
             "</tr>"
         )
     main = (
-        '<p class="eyebrow">Downloads</p>\n'
-        f"<h1>{_escape(organization)}</h1>\n"
+        f'<p class="eyebrow">{_escape(organization)}</p>\n'
+        "<h1>Downloads</h1>\n"
         "<table>\n<thead><tr><th>Program</th><th>Latest</th><th>Released</th></tr></thead>\n"
         "<tbody>\n" + "\n".join(rows) + "\n</tbody>\n</table>\n"
     )
@@ -346,7 +346,7 @@ def render_root_page(manifests: list[Manifest], organization: str, logo: Path | 
         "index.html",
         _render(
             None,
-            title=f"{organization} downloads",
+            title="Downloads",
             main=main,
             footer=_escape(organization),
             logo=logo_data_uri(logo) if logo else None,
