@@ -25,6 +25,9 @@ tapio-build = "tapio_build_tools.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+"tapio_build_tools.downloads" = ["templates/*.html"]
+
 [tool.pytest.ini_options]
 addopts = "-q"
 testpaths = ["tests"]

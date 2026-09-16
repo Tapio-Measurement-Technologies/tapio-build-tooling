@@ -16,6 +16,7 @@ class ActionTests(unittest.TestCase):
             ROOT / "actions/python-release-checks/action.yml",
             ROOT / "actions/python-release-evidence/action.yml",
             ROOT / "actions/node-supply-chain/action.yml",
+            ROOT / "actions/publish-downloads/action.yml",
         ]
         uses = []
         for path in files:
@@ -62,6 +63,20 @@ class ActionTests(unittest.TestCase):
         self.assertLess(action.index("npm ci"), action.index("node sbom"))
         self.assertLess(action.index("node sbom"), action.index("node audit"))
         self.assertIn("--ignore-scripts --no-audit --no-fund", action)
+
+    def test_publish_downloads_validates_and_authenticates_before_publishing(self) -> None:
+        action = (ROOT / "actions/publish-downloads" / "action.yml").read_text(encoding="utf-8")
+        self.assertLess(action.index("config validate"), action.index("configure-aws-credentials"))
+        self.assertLess(action.index("configure-aws-credentials"), action.index("downloads publish"))
+        self.assertNotIn("--acl", action)
+
+    def test_publish_downloads_carries_no_deployment_of_its_own(self) -> None:
+        """The tooling is public; buckets, roles and addresses belong to the consumer."""
+        action = (ROOT / "actions/publish-downloads" / "action.yml").read_text(encoding="utf-8")
+        for literal in ["arn:aws:", "amazonaws.com", "s3://", "tapiotechnologies"]:
+            with self.subTest(literal=literal):
+                self.assertNotIn(literal, action)
+        self.assertIsNone(re.search(r"[\w.-]+@[\w-]+\.\w+", action), "an email address in the action")
 
 
 if __name__ == "__main__":

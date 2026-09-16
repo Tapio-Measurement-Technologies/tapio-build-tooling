@@ -1,0 +1,50 @@
+# One proprietary product shipped as several programs, each built for Windows
+# and Linux. Every program gets a prefix of its own in the bucket; the pages
+# are for customers who were sent the link and carry noindex.
+schema-version = 1
+
+[organization]
+name = "Example Oy"
+
+[products.example-suite]
+name = "Example Suite"
+license-name = "Proprietary"
+
+[ecosystems.python]
+version = "3.12"
+
+[[ecosystems.python.requirements]]
+name = "runtime"
+input = "requirements.in"
+lock = "requirements.txt"
+
+[downloads]
+contact = "downloads@example.com"
+logo = "assets/logo.svg"
+
+[downloads.programs.alpha]
+slug = "example-suite-alpha"
+name = "Example Suite Alpha"
+notes = "Unzip the file and run the program inside; there is nothing to install."
+
+[[downloads.programs.alpha.assets]]
+os = "windows"
+glob = "dist/alpha-${version}-windows.exe"        # wrapped in a zip by default
+
+[[downloads.programs.alpha.assets]]
+os = "linux"
+glob = "dist/alpha-${version}-linux"              # wrapped in a tar.gz, executable bit set
+
+[downloads.programs.beta]
+slug = "example-suite-beta"
+name = "Example Suite Beta"
+notes = "Unzip the file and run the program inside; there is nothing to install."
+
+[[downloads.programs.beta.assets]]
+os = "windows"
+glob = "dist/beta-${version}-windows.exe"
+
+[[downloads.programs.beta.assets]]
+os = "linux"
+arch = "aarch64"
+glob = "dist/beta-${version}-linux-arm64"

@@ -1,5 +1,7 @@
 from pathlib import Path
 import os
+import re
+import tempfile
 import unittest
 
 from tapio_build_tools.config import load_config
@@ -22,6 +24,29 @@ class ExampleCompatibilityTests(unittest.TestCase):
             with self.subTest(repository=repository):
                 config = load_config(repositories_root / repository, ROOT / "examples" / example)
                 self.assertIsNotNone(getattr(config, ecosystem))
+                if "[downloads]" in (ROOT / "examples" / example).read_text(encoding="utf-8"):
+                    self.assertIsNotNone(config.downloads)
+
+
+    def test_downloads_examples_validate_against_a_project_of_their_shape(self) -> None:
+        for example in sorted((ROOT / "examples").glob("downloads-*.toml")):
+            with self.subTest(example=example.name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / "requirements.in").write_text("packaging==26.2\n", encoding="utf-8")
+                (root / "requirements.txt").write_text("packaging==26.2\n", encoding="utf-8")
+                (root / "assets").mkdir()
+                (root / "assets" / "logo.png").write_bytes(b"png")
+                (root / "assets" / "logo.svg").write_text("<svg/>", encoding="utf-8")
+                config = load_config(root, example)
+                self.assertTrue(config.require_downloads().programs)
+
+    def test_examples_name_nobody_in_particular(self) -> None:
+        """The repository is public: contacts in examples are placeholders."""
+        for example in (ROOT / "examples").glob("*.toml"):
+            with self.subTest(example=example.name):
+                text = example.read_text(encoding="utf-8")
+                for address in re.findall(r"[\w.-]+@[\w.-]+", text):
+                    self.assertTrue(address.endswith("@example.com"), address)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,38 @@
+# One program under a copyleft licence, built for Windows only. The tagged
+# source tree is published next to the signed executable, the page carries
+# the written offer, and search engines may index it.
+schema-version = 1
+
+[organization]
+name = "Example Oy"
+website = "https://www.example.com"
+
+[products.example-app]
+name = "Example App"
+license-id = "GPL-3.0-or-later"
+repository = "https://github.com/example/example-app"
+
+[ecosystems.python]
+version = "3.12"
+
+[[ecosystems.python.requirements]]
+name = "runtime"
+input = "requirements.in"
+lock = "requirements.txt"
+
+[downloads]
+contact = "downloads@example.com"
+logo = "assets/logo.png"
+
+[downloads.programs.example-app]
+slug = "example-app"
+name = "Example App"
+source-package = true
+indexable = true
+notes = "There is nothing to install: save the program anywhere and run it."
+
+[[downloads.programs.example-app.assets]]
+os = "windows"
+glob = "dist/example-app-${version}.exe"
+archive = "none"                                  # the signed executable as it is
+sbom = "dist/example-app-${version}.cdx.json"
