@@ -131,6 +131,30 @@ def _paragraphs(text: str | None) -> str:
     return "".join(f'<p class="note">{_escape(block)}</p>\n' for block in blocks if block)
 
 
+def _support(program: DownloadProgram, newest: Release) -> str:
+    """Until when security updates are promised, and where a vulnerability is reported.
+
+    The date rolls: it is counted from the newest release, so it moves
+    forward with every release and never promises more than the configured
+    number of years at any one time. Shown unfolded on every page, because
+    it is what somebody deciding whether to install needs to find.
+    """
+    lines = []
+    if program.support_years is not None:
+        released = datetime.fromisoformat(newest.released.replace("Z", "+00:00"))
+        until = released.replace(year=released.year + program.support_years, day=1)
+        lines.append(
+            "Security updates are provided in the latest version, free of charge, until at least "
+            f"{_escape(f'{until:%B %Y}')}."
+        )
+    if program.security_contact:
+        address = _escape(program.security_contact)
+        lines.append(f'Report a security issue to <a href="mailto:{address}">{address}</a>.')
+    if not lines:
+        return ""
+    return f'<p class="note support">{" ".join(lines)}</p>\n'
+
+
 def _fold(kind: str, title: str, body: str) -> str:
     return (
         f'<details class="fold {kind}">\n<summary>{_escape(title)}</summary>\n'
@@ -220,6 +244,7 @@ def _release_body(
         f'<p class="note">Questions and licences: <a href="mailto:{_escape(program.contact)}">'
         f"{_escape(program.contact)}</a>.</p>\n"
     )
+    parts.append(_support(program, newest))
     versions_href = _escape(_href(page_key, f"{manifest.slug}/versions/index.html"))
     parts.append(f'<p class="note"><a href="{versions_href}">All versions</a></p>\n')
     return "".join(parts)

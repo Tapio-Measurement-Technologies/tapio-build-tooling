@@ -28,6 +28,13 @@ class DownloadsConfigTests(unittest.TestCase):
         self.assertTrue(program.source_package)
         self.assertFalse(program.indexable)
         self.assertTrue(program.listed)
+        self.assertIsNone(program.security_contact)
+        self.assertIsNone(program.support_years)
+        supported = self.load(
+            GPL_CONFIG.replace('contact = "downloads@example.com"', 'contact = "downloads@example.com"\nsecurity-contact = "security@example.com"')
+            .replace('slug = "demo"', 'slug = "demo"\nsupport-years = 5')
+        ).require_downloads().program("demo")
+        self.assertEqual((supported.security_contact, supported.support_years), ("security@example.com", 5))
         unlisted = self.load(GPL_CONFIG.replace('slug = "demo"', 'slug = "demo"\nlisted = false'))
         self.assertFalse(unlisted.require_downloads().program("demo").listed)
         windows, linux = program.assets
@@ -66,6 +73,10 @@ class DownloadsConfigTests(unittest.TestCase):
             (GPL_CONFIG, 'glob = "dist/demo-${version}-linux"', 'glob = "dist/demo-$-linux"', "not a valid pattern"),
             (GPL_CONFIG, 'license-id = "GPL-3.0-or-later"', 'license-name = "Proprietary"', "source-package needs products.demo.license-id"),
             (GPL_CONFIG, 'contact = "downloads@example.com"', 'contact = "nobody"', "contact must be an email address"),
+            (GPL_CONFIG, 'contact = "downloads@example.com"', 'contact = "downloads@example.com"\nsecurity-contact = "nobody"', "security-contact must be an email address"),
+            (GPL_CONFIG, 'slug = "demo"', 'slug = "demo"\nsupport-years = 0', "support-years must be a whole number"),
+            (GPL_CONFIG, 'slug = "demo"', 'slug = "demo"\nsupport-years = "five"', "support-years must be a whole number"),
+            (GPL_CONFIG, 'slug = "demo"', 'slug = "demo"\nsupport-years = true', "support-years must be a whole number"),
             (PROPRIETARY_CONFIG, 'slug = "suite-second"', 'slug = "suite-first"', "slug duplicates downloads.programs.first"),
             (PROPRIETARY_CONFIG, 'contact = "downloads@example.com"\n', "", "contact is required when downloads.contact is not set"),
             (PROPRIETARY_CONFIG, '[[downloads.programs.second.assets]]\nos = "windows"\nglob = "dist/second-${version}-windows.exe"\n', "", "assets must be a non-empty array"),

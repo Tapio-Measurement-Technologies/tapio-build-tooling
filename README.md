@@ -108,6 +108,7 @@ consumer's repository variables.
 ```toml
 [downloads]
 contact = "downloads@example.com"    # inherited by programs; must be an address
+security-contact = "security@example.com"   # optional, inherited; where a vulnerability is reported
 logo = "src/assets/logo.png"         # optional; .png or .svg, inlined into every page
 
 [downloads.programs.app]
@@ -118,6 +119,7 @@ notes = "Nothing to install: save the program anywhere and run it."
 source-package = true                # git archive of the tag, offered on the page
 indexable = true                     # let search engines index the pages
 listed = true                        # name the program on the bucket-root index page
+support-years = 5                    # optional; security updates promised this long after the newest release
 
 [[downloads.programs.app.assets]]
 os = "windows"                       # windows | linux | macos
@@ -126,6 +128,12 @@ glob = "dist/example-app-${version}.exe"   # ${version} is the tag; exactly one 
 archive = "none"                     # zip | tar.gz | none; default zip on Windows, tar.gz elsewhere
 sbom = "dist/example-app-${version}.cdx.json"   # optional; linked from the page
 ```
+
+`support-years` puts "Security updates are provided in the latest version,
+free of charge, until at least <month year>" on every page of the program,
+counted from the newest release, so the date moves forward with each release
+and never promises more than that many years at once. `security-contact` adds
+where to report a security issue. Both are shown unfolded.
 
 `source-package` needs the product's `license-id`: the page names the licence
 and carries a written offer of the corresponding source, which is published in

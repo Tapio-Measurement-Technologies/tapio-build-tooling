@@ -157,6 +157,22 @@ class RenderTests(unittest.TestCase):
         self.assertNotIn("Release notes", pages["demo/v1.2.0/index.html"])
         self.assertNotIn("Release notes", self.pages["demo/index.html"])
 
+    def test_support_period_and_security_contact_are_shown_when_configured(self) -> None:
+        self.assertNotIn("Security updates", self.pages["demo/index.html"])
+        self.assertNotIn("security issue", self.pages["demo/index.html"])
+        program = write_project(
+            Path(self.temporary.name),
+            GPL_CONFIG.replace('contact = "downloads@example.com"', 'contact = "downloads@example.com"\nsecurity-contact = "security@example.com"')
+            .replace('slug = "demo"', 'slug = "demo"\nsupport-years = 5'),
+        ).require_downloads().program("demo")
+        pages = {p.key: p.html for p in render_program_pages(program, self.manifest, "Example Oy")}
+        # Counted from the newest release (16 September 2026), on every version's page alike.
+        for key in ("demo/index.html", "demo/v1.2.0/index.html"):
+            self.assertIn("in the latest version, free of charge, until at least September 2031.", pages[key])
+            self.assertIn('Report a security issue to <a href="mailto:security@example.com">', pages[key])
+            self.assertNotIn("Security updates", pages[key].split("</details>")[0].split("<details")[-1])
+        self.assertNotIn("Security updates", pages["demo/versions/index.html"])
+
     def test_the_logo_is_inlined_when_configured(self) -> None:
         self.assertIn('src="data:image/png;base64,', self.pages["demo/index.html"])
         plain = render_program_pages(self.program, self.manifest, "Example Oy")[0].html

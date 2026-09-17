@@ -103,6 +103,10 @@ class DownloadProgram:
     indexable: bool = False
     source_package: bool = False
     listed: bool = True
+    # Where a vulnerability is reported, and for how many years after its
+    # newest release the program is promised security updates.
+    security_contact: str | None = None
+    support_years: int | None = None
 
 
 @dataclass(frozen=True)
@@ -354,11 +358,15 @@ def _choice(table: dict[str, Any], key: str, label: str, allowed: tuple[str, ...
     return value
 
 
+def _email(table: dict[str, Any], key: str, label: str) -> str | None:
+    address = _optional_string(table, key, label)
+    if address is not None and "@" not in address:
+        raise ConfigError(f"{label}.{key} must be an email address")
+    return address
+
+
 def _contact(table: dict[str, Any], label: str) -> str | None:
-    contact = _optional_string(table, "contact", label)
-    if contact is not None and "@" not in contact:
-        raise ConfigError(f"{label}.contact must be an email address")
-    return contact
+    return _email(table, "contact", label)
 
 
 def _asset_pattern(project: Path, table: dict[str, Any], key: str, label: str) -> str:
@@ -400,8 +408,9 @@ def _load_asset(project: Path, raw_asset: Any, label: str) -> DownloadAsset:
 
 def _load_downloads(project: Path, raw: Any, products: dict[str, Product]) -> Downloads:
     data = _table(raw, "downloads")
-    _keys(data, {"contact", "logo", "programs"}, "downloads")
+    _keys(data, {"contact", "security-contact", "logo", "programs"}, "downloads")
     default_contact = _contact(data, "downloads")
+    default_security_contact = _email(data, "security-contact", "downloads")
     logo: Path | None = None
     if (logo_value := _optional_string(data, "logo", "downloads")) is not None:
         logo = _project_path(project, logo_value, "downloads.logo", must_exist=True)
@@ -415,6 +424,7 @@ def _load_downloads(project: Path, raw: Any, products: dict[str, Product]) -> Do
     slugs: dict[str, str] = {}
     program_keys = {
         "product", "slug", "name", "notes", "contact", "indexable", "source-package", "listed", "assets",
+        "security-contact", "support-years",
     }
     for program_id, raw_program in programs_data.items():
         label = f"downloads.programs.{program_id}"
@@ -448,6 +458,12 @@ def _load_downloads(project: Path, raw: Any, products: dict[str, Product]) -> Do
                 f"{label}.source-package needs products.{product.id}.license-id, which the page names"
             )
 
+        support_years = program_data.get("support-years")
+        if support_years is not None and (
+            isinstance(support_years, bool) or not isinstance(support_years, int) or not 1 <= support_years <= 50
+        ):
+            raise ConfigError(f"{label}.support-years must be a whole number of years from 1 to 50")
+
         raw_assets = program_data.get("assets")
         if not isinstance(raw_assets, list) or not raw_assets:
             raise ConfigError(f"{label}.assets must be a non-empty array")
@@ -471,5 +487,7 @@ def _load_downloads(project: Path, raw: Any, products: dict[str, Product]) -> Do
             indexable=_optional_bool(program_data, "indexable", label, False),
             source_package=source_package,
             listed=_optional_bool(program_data, "listed", label, True),
+            security_contact=_email(program_data, "security-contact", label) or default_security_contact,
+            support_years=support_years,
         )
     return Downloads(programs=programs, logo=logo)
