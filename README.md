@@ -38,6 +38,35 @@ End-user installs remain standard `pip install -r requirements.txt`.
 Requirement compilation uses uv's universal resolver so one hashed lock includes
 platform-specific dependencies for Linux, macOS, and Windows.
 
+### Release cooldown
+
+`cooldown-days` under `[ecosystems.python]` keeps a release out of a lock until
+it has sat on the index that long:
+
+```toml
+[ecosystems.python]
+version = "3.12"
+cooldown-days = 7
+```
+
+The resolver is handed `--exclude-newer` at that many days ago, which uv
+compares against the upload time of each distribution file. A compromised
+release is usually spotted and pulled within hours, so a week's wait means the
+compile never sees it.
+
+The cutoff only binds where the resolver is free to choose: without `--upgrade`
+uv keeps the pins already in the lock, so an advancing cutoff never turns a
+current lock stale and `compile --check` stays stable. A release younger than
+the window - a security fix, say - is taken with `--no-cooldown`, which leaves
+the decision in the commit that made it:
+
+```bash
+tapio-build --project . python requirements compile --upgrade --no-cooldown
+```
+
+`python audit` still fails on a known vulnerability inside the window, so a
+cooldown delays a fix rather than hiding the need for one.
+
 ## Node/npm commands
 
 ```bash

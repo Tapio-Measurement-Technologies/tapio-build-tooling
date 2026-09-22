@@ -12,6 +12,7 @@ website = "https://www.tapiotechnologies.com"
 
 [ecosystems.python]
 version = "3.12"
+cooldown-days = 7
 
 [[ecosystems.python.requirements]]
 name = "tooling"

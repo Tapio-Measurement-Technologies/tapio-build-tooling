@@ -54,6 +54,10 @@ class RequirementGroup:
 class PythonEcosystem:
     version: str
     requirements: tuple[RequirementGroup, ...]
+    # How long a release must have sat on the index before the resolver may
+    # pick it. A poisoned release is usually caught and pulled within hours,
+    # so waiting keeps it out of a lock nobody had reason to compile that day.
+    cooldown_days: int | None = None
 
     def requirement(self, name: str) -> RequirementGroup:
         for group in self.requirements:
@@ -265,8 +269,17 @@ def load_config(
     python: PythonEcosystem | None = None
     if "python" in ecosystems_data:
         python_data = _table(ecosystems_data["python"], "ecosystems.python")
-        _keys(python_data, {"version", "requirements"}, "ecosystems.python")
+        _keys(python_data, {"version", "requirements", "cooldown-days"}, "ecosystems.python")
         version = _required_string(python_data, "version", "ecosystems.python")
+        cooldown_days = python_data.get("cooldown-days")
+        if cooldown_days is not None and (
+            isinstance(cooldown_days, bool)
+            or not isinstance(cooldown_days, int)
+            or not 1 <= cooldown_days <= 365
+        ):
+            raise ConfigError(
+                "ecosystems.python.cooldown-days must be a whole number of days from 1 to 365"
+            )
         raw_groups = python_data.get("requirements")
         if not isinstance(raw_groups, list) or not raw_groups:
             raise ConfigError("ecosystems.python.requirements must be a non-empty array")
@@ -299,7 +312,9 @@ def load_config(
                     ),
                 )
             )
-        python = PythonEcosystem(version=version, requirements=tuple(groups))
+        python = PythonEcosystem(
+            version=version, requirements=tuple(groups), cooldown_days=cooldown_days
+        )
 
     node: NodeEcosystem | None = None
     if "node" in ecosystems_data:

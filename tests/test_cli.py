@@ -45,6 +45,19 @@ lock = "package-lock.json"
             audit_node.assert_called_once()
 
 
+    @patch("tapio_build_tools.cli.compile_requirements")
+    def test_no_cooldown_waives_the_configured_cooldown(self, compile_requirements) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_project(root)
+            compile_requirements.return_value = []
+            with redirect_stdout(StringIO()):
+                result = main([
+                    "--project", str(root), "python", "requirements", "compile", "--no-cooldown",
+                ])
+            self.assertEqual(result, 0)
+            self.assertFalse(compile_requirements.call_args.kwargs["cooldown"])
+
     @patch("tapio_build_tools.cli.publish_downloads")
     def test_dispatches_downloads_publish(self, publish_downloads) -> None:
         with tempfile.TemporaryDirectory() as directory:

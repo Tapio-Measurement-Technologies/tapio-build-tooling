@@ -46,6 +46,11 @@ def build_parser() -> argparse.ArgumentParser:
     compile_mode = compile_parser.add_mutually_exclusive_group()
     compile_mode.add_argument("--check", action="store_true", help="fail if locks would change")
     compile_mode.add_argument("--upgrade", action="store_true", help="upgrade allowed versions")
+    compile_parser.add_argument(
+        "--no-cooldown",
+        action="store_true",
+        help="ignore the configured cooldown, to take a release younger than it",
+    )
 
     audit_parser = python_commands.add_parser("audit", help="audit a hashed requirement lock")
     audit_parser.add_argument("--group", required=True, help="configured requirement group")
@@ -123,6 +128,7 @@ def main(argv: list[str] | None = None) -> int:
                 group_name=args.group,
                 check=args.check,
                 upgrade=args.upgrade,
+                cooldown=not args.no_cooldown,
             )
             for result in results:
                 print(f"{result.group}: {result.status}")

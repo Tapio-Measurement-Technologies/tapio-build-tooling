@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from subprocess import CompletedProcess
 import sys
@@ -8,12 +9,14 @@ from unittest.mock import patch
 from tapio_build_tools.config import ConfigError, load_config
 from tapio_build_tools.ecosystems.python.requirements import (
     RequirementsError,
+    _cutoff,
     compile_requirements,
 )
 
 
-def config_text(version: str, *, with_input: bool = True) -> str:
+def config_text(version: str, *, with_input: bool = True, cooldown: int | None = None) -> str:
     input_line = 'input = "requirements.in"\n' if with_input else ""
+    cooldown_line = "" if cooldown is None else f"cooldown-days = {cooldown}\n"
     return f"""\
 schema-version = 1
 [organization]
@@ -22,7 +25,7 @@ name = "Tapio"
 name = "Demo"
 [ecosystems.python]
 version = "{version}"
-[[ecosystems.python.requirements]]
+{cooldown_line}[[ecosystems.python.requirements]]
 name = "runtime"
 {input_line}lock = "requirements.txt"
 """
@@ -38,10 +41,12 @@ class RequirementsTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
-    def config(self, *, with_input: bool = True):
+    def config(self, *, with_input: bool = True, cooldown: int | None = None):
         version = f"{sys.version_info.major}.{sys.version_info.minor}"
         path = self.root / "build-tooling.toml"
-        path.write_text(config_text(version, with_input=with_input), encoding="utf-8")
+        path.write_text(
+            config_text(version, with_input=with_input, cooldown=cooldown), encoding="utf-8"
+        )
         return load_config(self.root)
 
     @staticmethod
@@ -66,6 +71,7 @@ class RequirementsTests(unittest.TestCase):
         self.assertIn("--emit-build-options", command)
         self.assertIn("--cache-dir", command)
         self.assertIn("--custom-compile-command", command)
+        self.assertNotIn("--exclude-newer", command)
         self.assertEqual(command[-1], "requirements.in")
 
     @staticmethod
@@ -111,6 +117,31 @@ class RequirementsTests(unittest.TestCase):
         run.side_effect = self.fake_compile
         compile_requirements(self.config(), upgrade=True)
         self.assertIn("--upgrade", run.call_args.args[0])
+
+    @patch("tapio_build_tools.ecosystems.python.requirements.subprocess.run")
+    def test_configured_cooldown_excludes_newer_releases(self, run) -> None:
+        run.side_effect = self.fake_compile
+        before = datetime.now(timezone.utc)
+        compile_requirements(self.config(cooldown=7))
+        command = run.call_args.args[0]
+        cutoff = datetime.strptime(
+            command[command.index("--exclude-newer") + 1], "%Y-%m-%dT%H:%M:%SZ"
+        ).replace(tzinfo=timezone.utc)
+        window = before - timedelta(days=7)
+        # The cutoff is taken after `before` and printed whole seconds.
+        self.assertGreaterEqual(cutoff, window - timedelta(seconds=1))
+        self.assertLess(cutoff, window + timedelta(minutes=5))
+        self.assertEqual(command[-1], "requirements.in")
+
+    @patch("tapio_build_tools.ecosystems.python.requirements.subprocess.run")
+    def test_cooldown_can_be_waived(self, run) -> None:
+        run.side_effect = self.fake_compile
+        compile_requirements(self.config(cooldown=7), cooldown=False)
+        self.assertNotIn("--exclude-newer", run.call_args.args[0])
+
+    def test_cutoff_is_rfc_3339_utc(self) -> None:
+        now = datetime(2026, 9, 22, 13, 6, 25, tzinfo=timezone.utc)
+        self.assertEqual(_cutoff(7, now=now), "2026-09-15T13:06:25Z")
 
     @patch("tapio_build_tools.ecosystems.python.requirements.subprocess.run")
     def test_lock_only_group_is_skipped(self, run) -> None:

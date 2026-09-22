@@ -68,6 +68,16 @@ class ConfigTests(unittest.TestCase):
                 'lock = "../requirements.txt"',
                 "escapes project root",
             ),
+            (
+                'version = "3.12"',
+                'version = "3.12"\ncooldown-days = 0',
+                "whole number of days from 1 to 365",
+            ),
+            (
+                'version = "3.12"',
+                'version = "3.12"\ncooldown-days = "7"',
+                "whole number of days from 1 to 365",
+            ),
         ]
         for old, new, message in replacements:
             with self.subTest(message=message):
@@ -83,6 +93,11 @@ lock = "requirements.txt"
 """
         with self.assertRaisesRegex(ConfigError, "duplicate requirement group"):
             load_config(self.project(duplicate))
+
+    def test_cooldown_days_defaults_to_none_and_is_read_when_set(self) -> None:
+        self.assertIsNone(load_config(self.project()).python.cooldown_days)
+        text = BASE.replace('version = "3.12"', 'version = "3.12"\ncooldown-days = 7')
+        self.assertEqual(load_config(self.project(text)).python.cooldown_days, 7)
 
     def test_lock_only_group_is_supported(self) -> None:
         config = load_config(self.project(BASE.replace('input = "requirements.in"\n', "")))

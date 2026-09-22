@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 import os
 from pathlib import Path
 import shutil
@@ -34,7 +35,24 @@ def _check_python(config: Config) -> None:
         )
 
 
-def _command(config: Config, group: RequirementGroup, output: Path, upgrade: bool) -> list[str]:
+def _cutoff(days: int, *, now: datetime | None = None) -> str:
+    """The instant a release has to predate to be a candidate, as RFC 3339 UTC.
+
+    uv compares this against the upload time of each distribution file, so a
+    version that appeared on the index today is invisible to the resolver
+    until the cooldown has passed.
+    """
+    moment = (now or datetime.now(timezone.utc)) - timedelta(days=days)
+    return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _command(
+    config: Config,
+    group: RequirementGroup,
+    output: Path,
+    upgrade: bool,
+    cutoff: str | None,
+) -> list[str]:
     if group.input is None:
         raise AssertionError("lock-only groups cannot be compiled")
     command = [
@@ -57,6 +75,8 @@ def _command(config: Config, group: RequirementGroup, output: Path, upgrade: boo
         "--output-file",
         str(output),
     ]
+    if cutoff is not None:
+        command += ["--exclude-newer", cutoff]
     if upgrade:
         command.append("--upgrade")
     command.append(str(group.input.relative_to(config.project)))
@@ -95,14 +115,25 @@ def compile_requirements(
     group_name: str | None = None,
     check: bool = False,
     upgrade: bool = False,
+    cooldown: bool = True,
 ) -> list[CompileResult]:
     if check and upgrade:
         raise ConfigError("--check and --upgrade cannot be combined")
     _check_python(config)
+    python = config.require_python()
     groups = (
-        (config.require_python().requirement(group_name),)
+        (python.requirement(group_name),)
         if group_name is not None
-        else config.require_python().requirements
+        else python.requirements
+    )
+    # One cutoff for the whole run, so every group in it sees the same index.
+    # It moves forward between runs, which only matters where uv is free to
+    # choose a version: without --upgrade it keeps the pins already in the
+    # lock, so a lock that was current stays current as the cutoff advances.
+    cutoff = (
+        _cutoff(python.cooldown_days)
+        if cooldown and python.cooldown_days is not None
+        else None
     )
     results: list[CompileResult] = []
     stale: list[str] = []
@@ -120,7 +151,7 @@ def compile_requirements(
             shutil.copy2(group.lock, temporary)
         try:
             subprocess.run(
-                _command(config, group, temporary, upgrade),
+                _command(config, group, temporary, upgrade, cutoff),
                 cwd=config.project,
                 check=True,
             )
