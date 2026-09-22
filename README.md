@@ -29,6 +29,7 @@ tapio-build --project . config validate
 tapio-build --project . python requirements compile
 tapio-build --project . python requirements compile --check
 tapio-build --project . python requirements compile --upgrade
+tapio-build --project . python cooldown --group runtime
 tapio-build --project . python audit --group runtime
 tapio-build --project . python sbom --group runtime --product PRODUCT --output sbom.cdx.json
 ```
@@ -38,21 +39,40 @@ End-user installs remain standard `pip install -r requirements.txt`.
 Requirement compilation uses uv's universal resolver so one hashed lock includes
 platform-specific dependencies for Linux, macOS, and Windows.
 
-### Release cooldown
+## Node/npm commands
 
-`cooldown-days` under `[ecosystems.python]` keeps a release out of a lock until
-it has sat on the index that long:
+```bash
+tapio-build --project . node cooldown
+tapio-build --project . node audit
+tapio-build --project . node sbom --product PRODUCT --output sbom.cdx.json
+```
+
+Node evidence uses `package-lock.json` without omitting development or optional
+dependencies. `npm audit` fails on any reported vulnerability.
+
+## Release cooldown
+
+A supply-chain attack on a package arrives as a version published minutes ago
+and is usually spotted and pulled within hours. `cooldown-days` keeps a release
+out of a lock until it has sat on the index that long:
 
 ```toml
 [ecosystems.python]
 version = "3.12"
 cooldown-days = 7
+
+[ecosystems.node]
+version = "24"
+package = "package.json"
+lock = "package-lock.json"
+cooldown-days = 7
 ```
 
-The resolver is handed `--exclude-newer` at that many days ago, which uv
-compares against the upload time of each distribution file. A compromised
-release is usually spotted and pulled within hours, so a week's wait means the
-compile never sees it.
+It applies in two places.
+
+**While a lock is compiled.** `python requirements compile` hands uv
+`--exclude-newer` at that many days ago, which uv compares against the upload
+time of each distribution file, so a fresh release is never a candidate.
 
 The cutoff only binds where the resolver is free to choose: without `--upgrade`
 uv keeps the pins already in the lock, so an advancing cutoff never turns a
@@ -64,25 +84,35 @@ the decision in the commit that made it:
 tapio-build --project . python requirements compile --upgrade --no-cooldown
 ```
 
-`python audit` still fails on a known vulnerability inside the window, so a
-cooldown delays a fix rather than hiding the need for one.
-
-## Node/npm commands
+**Once a lock is written.** The `cooldown` commands read the lock itself and
+ask the index when each release in it appeared:
 
 ```bash
-tapio-build --project . node audit
-tapio-build --project . node sbom --product PRODUCT --output sbom.cdx.json
+tapio-build --project . python cooldown --group runtime
+tapio-build --project . node cooldown
 ```
 
-Node evidence uses `package-lock.json` without omitting development or optional
-dependencies. `npm audit` fails on any reported vulnerability.
+Both fail naming every release that is too young, newest first. This is the
+only enforcement an npm lock gets, because npm writes it; for Python it covers
+a lock hand-edited or compiled elsewhere. `--days` checks a window other than
+the configured one, and a project that configures none passes without asking
+the index anything.
+
+Python releases are dated through their hashes: the files behind the `--hash`
+lines are the ones dated, and a hash no file on PyPI has is an error rather
+than a pass. A lock-only group carries no hashes, and its releases are dated
+whole. npm releases are dated by the registry's publication time, and a tarball
+resolved from anywhere but the public registry is refused.
+
+`audit` still fails on a known vulnerability inside the window, so a cooldown
+delays a fix rather than hiding the need for one.
 
 ## GitHub Actions
 
-- `actions/python-supply-chain`: lock freshness, source SBOM, audit
-- `actions/python-release-checks`: config, lock freshness, audit, no artifact
+- `actions/python-supply-chain`: lock freshness, release ages, source SBOM, audit
+- `actions/python-release-checks`: config, lock freshness, release ages, audit, no artifact
 - `actions/python-release-evidence`: optional audit and artifact-bound PyInstaller SBOM
-- `actions/node-supply-chain`: npm lock validation, source SBOM, audit
+- `actions/node-supply-chain`: npm lock validation, release ages, source SBOM, audit
 - `actions/publish-downloads`: package a release, publish its download pages to S3
 - `actions/publish-release-notes`: put a GitHub release's notes on its download pages
 

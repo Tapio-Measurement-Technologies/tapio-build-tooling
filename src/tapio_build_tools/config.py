@@ -72,6 +72,9 @@ class NodeEcosystem:
     version: str
     package: Path
     lock: Path
+    # npm writes this lock, so the wait is checked against the registry rather
+    # than handed to a resolver. See PythonEcosystem.cooldown_days.
+    cooldown_days: int | None = None
 
 
 @dataclass(frozen=True)
@@ -271,15 +274,7 @@ def load_config(
         python_data = _table(ecosystems_data["python"], "ecosystems.python")
         _keys(python_data, {"version", "requirements", "cooldown-days"}, "ecosystems.python")
         version = _required_string(python_data, "version", "ecosystems.python")
-        cooldown_days = python_data.get("cooldown-days")
-        if cooldown_days is not None and (
-            isinstance(cooldown_days, bool)
-            or not isinstance(cooldown_days, int)
-            or not 1 <= cooldown_days <= 365
-        ):
-            raise ConfigError(
-                "ecosystems.python.cooldown-days must be a whole number of days from 1 to 365"
-            )
+        cooldown_days = _cooldown_days(python_data, "ecosystems.python")
         raw_groups = python_data.get("requirements")
         if not isinstance(raw_groups, list) or not raw_groups:
             raise ConfigError("ecosystems.python.requirements must be a non-empty array")
@@ -319,7 +314,7 @@ def load_config(
     node: NodeEcosystem | None = None
     if "node" in ecosystems_data:
         node_data = _table(ecosystems_data["node"], "ecosystems.node")
-        _keys(node_data, {"version", "package", "lock"}, "ecosystems.node")
+        _keys(node_data, {"version", "package", "lock", "cooldown-days"}, "ecosystems.node")
         package = _project_path(
             project_root,
             _required_string(node_data, "package", "ecosystems.node"),
@@ -342,6 +337,7 @@ def load_config(
             version=_required_string(node_data, "version", "ecosystems.node"),
             package=package,
             lock=lock,
+            cooldown_days=_cooldown_days(node_data, "ecosystems.node"),
         )
 
     downloads: Downloads | None = None
@@ -357,6 +353,15 @@ def load_config(
         node=node,
         downloads=downloads,
     )
+
+
+def _cooldown_days(table: dict[str, Any], label: str) -> int | None:
+    value = table.get("cooldown-days")
+    if value is not None and (
+        isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 365
+    ):
+        raise ConfigError(f"{label}.cooldown-days must be a whole number of days from 1 to 365")
+    return value
 
 
 def _optional_bool(table: dict[str, Any], key: str, label: str, default: bool) -> bool:

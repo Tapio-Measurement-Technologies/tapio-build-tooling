@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 import os
 from pathlib import Path
 import shutil
@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 
+from tapio_build_tools import cooldown
 from tapio_build_tools.config import Config, ConfigError, RequirementGroup
 
 
@@ -42,8 +43,7 @@ def _cutoff(days: int, *, now: datetime | None = None) -> str:
     version that appeared on the index today is invisible to the resolver
     until the cooldown has passed.
     """
-    moment = (now or datetime.now(timezone.utc)) - timedelta(days=days)
-    return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
+    return cooldown.timestamp(cooldown.cutoff(days, now=now))
 
 
 def _command(

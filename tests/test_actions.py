@@ -51,7 +51,15 @@ class ActionTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertLess(action.index("config validate"), action.index("compile --check"))
-        self.assertLess(action.index("compile --check"), action.index("python audit"))
+        self.assertLess(action.index("compile --check"), action.index("python cooldown"))
+        self.assertLess(action.index("python cooldown"), action.index("python audit"))
+
+    def test_supply_chain_actions_check_release_ages(self) -> None:
+        for name in ["python-supply-chain", "node-supply-chain", "python-release-checks"]:
+            with self.subTest(action=name):
+                action = (ROOT / "actions" / name / "action.yml").read_text(encoding="utf-8")
+                self.assertIn("cooldown:", action)
+                self.assertIn("inputs.cooldown == 'true'", action)
 
     def test_release_checks_leave_python_to_the_calling_workflow(self) -> None:
         action = (ROOT / "actions/python-release-checks" / "action.yml").read_text(

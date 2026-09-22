@@ -23,6 +23,9 @@ inputs:
   audit:
     description: Run pip-audit against selected lock
     default: "true"
+  cooldown:
+    description: Check that no locked release is younger than the configured cooldown
+    default: "true"
   upload-name:
     description: Uploaded SBOM artifact name
     default: source-sbom
@@ -57,6 +60,14 @@ runs:
       env:
         CONFIG: ${{ inputs.config }}
       run: tapio-build --project "$GITHUB_WORKSPACE" --config "$CONFIG" python requirements compile --check
+
+    - name: Check the ages of the locked releases
+      if: ${{ inputs.cooldown == 'true' }}
+      shell: bash
+      env:
+        CONFIG: ${{ inputs.config }}
+        GROUP: ${{ inputs.requirement-group }}
+      run: tapio-build --project "$GITHUB_WORKSPACE" --config "$CONFIG" python cooldown --group "$GROUP"
 
     - name: Generate source SBOM
       shell: bash

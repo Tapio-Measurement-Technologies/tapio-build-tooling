@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 import os
 from pathlib import Path
 import sys
 import tempfile
 
 from tapio_build_tools.config import ConfigError, load_config
+from tapio_build_tools.cooldown import CooldownError, cutoff, timestamp
 from tapio_build_tools.downloads import DownloadsError
 from tapio_build_tools.downloads.publish import (
     publish_downloads,
@@ -18,9 +20,11 @@ from tapio_build_tools.downloads.publish import (
 )
 from tapio_build_tools.ecosystems.node.audit import AuditError as NodeAuditError
 from tapio_build_tools.ecosystems.node.audit import audit as audit_node
+from tapio_build_tools.ecosystems.node.cooldown import check as check_node_cooldown
 from tapio_build_tools.ecosystems.node.sbom import SbomError as NodeSbomError
 from tapio_build_tools.ecosystems.node.sbom import generate_sbom as generate_node_sbom
 from tapio_build_tools.ecosystems.python.audit import AuditError, audit
+from tapio_build_tools.ecosystems.python.cooldown import check as check_python_cooldown
 from tapio_build_tools.ecosystems.python.requirements import (
     RequirementsError,
     compile_requirements,
@@ -52,6 +56,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="ignore the configured cooldown, to take a release younger than it",
     )
 
+    python_cooldown = python_commands.add_parser(
+        "cooldown", help="check the ages of the releases a lock pins"
+    )
+    python_cooldown.add_argument("--group", required=True, help="configured requirement group")
+    python_cooldown.add_argument(
+        "--days", type=int, help="cooldown to check, overriding the configured one"
+    )
+
     audit_parser = python_commands.add_parser("audit", help="audit a hashed requirement lock")
     audit_parser.add_argument("--group", required=True, help="configured requirement group")
 
@@ -70,6 +82,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     node = commands.add_parser("node", help="Node/npm ecosystem operations")
     node_commands = node.add_subparsers(dest="node_command", required=True)
+    node_cooldown = node_commands.add_parser(
+        "cooldown", help="check the ages of the releases the package lock pins"
+    )
+    node_cooldown.add_argument(
+        "--days", type=int, help="cooldown to check, overriding the configured one"
+    )
     node_commands.add_parser("audit", help="audit the configured npm package lock")
     node_sbom = node_commands.add_parser("sbom", help="generate CycloneDX evidence")
     node_sbom.add_argument("--product", help="configured product ID")
@@ -114,6 +132,18 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _window(
+    parser: argparse.ArgumentParser, days: int | None, configured: int | None
+) -> datetime | None:
+    """The moment a pinned release has to predate, or None when none is set."""
+    chosen = days if days is not None else configured
+    if chosen is None:
+        return None
+    if not 1 <= chosen <= 365:
+        parser.error("--days must be a whole number of days from 1 to 365")
+    return cutoff(chosen)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -132,6 +162,14 @@ def main(argv: list[str] | None = None) -> int:
             )
             for result in results:
                 print(f"{result.group}: {result.status}")
+            return 0
+        if args.command == "python" and args.python_command == "cooldown":
+            moment = _window(parser, args.days, config.require_python().cooldown_days)
+            if moment is None:
+                print(f"{args.group}: no cooldown configured")
+                return 0
+            pinned = check_python_cooldown(config, args.group, moment)
+            print(f"{args.group}: {len(pinned)} release(s), none newer than {timestamp(moment)}")
             return 0
         if args.command == "python" and args.python_command == "audit":
             audit(config, args.group)
@@ -152,6 +190,14 @@ def main(argv: list[str] | None = None) -> int:
                 pyinstaller_version=args.pyinstaller_version,
             )
             print(f"Generated CycloneDX SBOM: {output}")
+            return 0
+        if args.command == "node" and args.node_command == "cooldown":
+            moment = _window(parser, args.days, config.require_node().cooldown_days)
+            if moment is None:
+                print("package-lock.json: no cooldown configured")
+                return 0
+            pinned = check_node_cooldown(config, moment)
+            print(f"package-lock.json: {len(pinned)} release(s), none newer than {timestamp(moment)}")
             return 0
         if args.command == "node" and args.node_command == "audit":
             audit_node(config)
@@ -235,6 +281,7 @@ def main(argv: list[str] | None = None) -> int:
     except (
         AuditError,
         ConfigError,
+        CooldownError,
         DownloadsError,
         NodeAuditError,
         NodeSbomError,

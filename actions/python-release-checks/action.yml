@@ -11,6 +11,9 @@ inputs:
   audit:
     description: Run pip-audit against the selected lock
     default: "true"
+  cooldown:
+    description: Check that no locked release is younger than the configured cooldown
+    default: "true"
   lock-check:
     description: Check every requirement lock against its input
     default: "true"
@@ -38,6 +41,14 @@ runs:
       env:
         CONFIG: ${{ inputs.config }}
       run: tapio-build --project "$GITHUB_WORKSPACE" --config "$CONFIG" python requirements compile --check
+
+    - name: Check the ages of the locked releases
+      if: ${{ inputs.cooldown == 'true' }}
+      shell: bash
+      env:
+        CONFIG: ${{ inputs.config }}
+        GROUP: ${{ inputs.requirement-group }}
+      run: tapio-build --project "$GITHUB_WORKSPACE" --config "$CONFIG" python cooldown --group "$GROUP"
 
     - name: Audit runtime dependencies
       if: ${{ inputs.audit == 'true' }}

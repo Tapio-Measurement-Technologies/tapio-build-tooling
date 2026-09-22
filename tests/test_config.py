@@ -99,6 +99,19 @@ lock = "requirements.txt"
         text = BASE.replace('version = "3.12"', 'version = "3.12"\ncooldown-days = 7')
         self.assertEqual(load_config(self.project(text)).python.cooldown_days, 7)
 
+    def test_node_takes_a_cooldown_too(self) -> None:
+        text = BASE + """
+[ecosystems.node]
+version = "24"
+package = "package.json"
+lock = "package-lock.json"
+cooldown-days = 14
+"""
+        root = self.project(text)
+        (root / "package.json").write_text("{}\n", encoding="utf-8")
+        (root / "package-lock.json").write_text("{}\n", encoding="utf-8")
+        self.assertEqual(load_config(root).node.cooldown_days, 14)
+
     def test_lock_only_group_is_supported(self) -> None:
         config = load_config(self.project(BASE.replace('input = "requirements.in"\n', "")))
         self.assertIsNone(config.python.requirement("runtime").input)

@@ -26,6 +26,9 @@ inputs:
   audit:
     description: Run npm audit against the complete package lock
     default: "true"
+  cooldown:
+    description: Check that no locked release is younger than the configured cooldown
+    default: "true"
   upload-name:
     description: Uploaded SBOM artifact name
     default: source-sbom
@@ -70,6 +73,13 @@ runs:
       env:
         PACKAGE_DIRECTORY: ${{ inputs.package-directory }}
       run: npm ci --prefix "$GITHUB_WORKSPACE/$PACKAGE_DIRECTORY" --ignore-scripts --no-audit --no-fund
+
+    - name: Check the ages of the locked releases
+      if: ${{ inputs.cooldown == 'true' }}
+      shell: bash
+      env:
+        CONFIG: ${{ inputs.config }}
+      run: tapio-build --project "$GITHUB_WORKSPACE" --config "$CONFIG" node cooldown
 
     - name: Generate source SBOM
       shell: bash

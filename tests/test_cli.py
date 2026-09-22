@@ -1,4 +1,5 @@
 from contextlib import redirect_stderr, redirect_stdout
+from datetime import datetime, timedelta, timezone
 from io import StringIO
 from pathlib import Path
 import tempfile
@@ -57,6 +58,47 @@ lock = "package-lock.json"
                 ])
             self.assertEqual(result, 0)
             self.assertFalse(compile_requirements.call_args.kwargs["cooldown"])
+
+    @patch("tapio_build_tools.cli.check_python_cooldown")
+    def test_cooldown_is_skipped_when_none_is_configured(self, check) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_project(root)
+            stdout = StringIO()
+            with redirect_stdout(stdout):
+                result = main([
+                    "--project", str(root), "python", "cooldown", "--group", "runtime",
+                ])
+            self.assertEqual(result, 0)
+            check.assert_not_called()
+            self.assertIn("no cooldown configured", stdout.getvalue())
+
+    @patch("tapio_build_tools.cli.check_python_cooldown")
+    def test_days_overrides_the_configured_cooldown(self, check) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_project(root)
+            check.return_value = []
+            before = datetime.now(timezone.utc)
+            with redirect_stdout(StringIO()):
+                result = main([
+                    "--project", str(root), "python", "cooldown", "--group", "runtime", "--days", "30",
+                ])
+            self.assertEqual(result, 0)
+            moment = check.call_args.args[2]
+            self.assertLess(moment, before - timedelta(days=30) + timedelta(minutes=5))
+            self.assertGreater(moment, before - timedelta(days=30, minutes=5))
+
+    def test_a_cooldown_outside_the_supported_range_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_project(root)
+            stderr = StringIO()
+            with redirect_stderr(stderr), self.assertRaises(SystemExit):
+                main([
+                    "--project", str(root), "python", "cooldown", "--group", "runtime", "--days", "0",
+                ])
+            self.assertIn("from 1 to 365", stderr.getvalue())
 
     @patch("tapio_build_tools.cli.publish_downloads")
     def test_dispatches_downloads_publish(self, publish_downloads) -> None:
