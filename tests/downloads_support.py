@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import json
 from pathlib import Path
 import subprocess
@@ -152,10 +153,14 @@ class FakeRunner:
     def _git(self, args: list[str]) -> subprocess.CompletedProcess:
         if "archive" in args:
             target = Path(args[args.index("-o") + 1])
-            with tarfile.open(target, "w:gz") as archive:
-                info = tarfile.TarInfo(args[args.index("--format=tar.gz") + 1].removeprefix("--prefix=") + "LICENSE")
-                info.size = 0
-                archive.addfile(info)
+            # Dated like git archive's own output, not by the clock: a second
+            # ticking over between two publishes would otherwise change the
+            # source archive and make the release look republished.
+            with target.open("wb") as stream, gzip.GzipFile(fileobj=stream, mode="wb", mtime=0) as compressed:
+                with tarfile.open(fileobj=compressed, mode="w") as archive:
+                    info = tarfile.TarInfo(args[args.index("--format=tar.gz") + 1].removeprefix("--prefix=") + "LICENSE")
+                    info.size = 0
+                    archive.addfile(info)
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
     def uploads(self) -> list[list[str]]:
