@@ -18,6 +18,8 @@ class ActionTests(unittest.TestCase):
             ROOT / "actions/node-supply-chain/action.yml",
             ROOT / "actions/publish-downloads/action.yml",
             ROOT / "actions/publish-release-notes/action.yml",
+            ROOT / "actions/builder-image/action.yml",
+            ROOT / "actions/publish-archive/action.yml",
         ]
         uses = []
         for path in files:
@@ -79,9 +81,22 @@ class ActionTests(unittest.TestCase):
         self.assertLess(action.index("configure-aws-credentials"), action.index("downloads publish"))
         self.assertNotIn("--acl", action)
 
+    def test_publish_archive_validates_and_authenticates_before_publishing(self) -> None:
+        action = (ROOT / "actions/publish-archive" / "action.yml").read_text(encoding="utf-8")
+        self.assertLess(action.index("config validate"), action.index("configure-aws-credentials"))
+        self.assertLess(action.index("configure-aws-credentials"), action.index("archive publish"))
+        self.assertIn("inputs.bucket != ''", action)
+        self.assertNotIn("--acl", action)
+
+    def test_builder_image_is_named_by_the_tooling_before_it_is_built(self) -> None:
+        action = (ROOT / "actions/builder-image" / "action.yml").read_text(encoding="utf-8")
+        self.assertLess(action.index("config validate"), action.index("archive names"))
+        self.assertLess(action.index("archive names"), action.index("docker build"))
+        self.assertNotIn("configure-aws-credentials", action)
+
     def test_publish_downloads_carries_no_deployment_of_its_own(self) -> None:
         """The tooling is public; buckets, roles and addresses belong to the consumer."""
-        for name in ["publish-downloads", "publish-release-notes"]:
+        for name in ["publish-downloads", "publish-release-notes", "publish-archive", "builder-image"]:
             action = (ROOT / "actions" / name / "action.yml").read_text(encoding="utf-8")
             for literal in ["arn:aws:", "amazonaws.com", "s3://", "tapiotechnologies"]:
                 with self.subTest(action=name, literal=literal):

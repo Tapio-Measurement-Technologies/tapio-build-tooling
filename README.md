@@ -2,8 +2,8 @@
 
 Shared supply-chain tooling for Tapio products. Current adapters support Python
 requirements and npm package locks, vulnerability audits, and CycloneDX SBOM
-evidence. Ecosystem layout allows later PlatformIO adapters without changing
-existing interfaces.
+evidence, release download pages and private build archives. Ecosystem layout
+allows later PlatformIO adapters without changing existing interfaces.
 
 ## Install
 
@@ -115,6 +115,8 @@ delays a fix rather than hiding the need for one.
 - `actions/node-supply-chain`: npm lock validation, release ages, source SBOM, audit
 - `actions/publish-downloads`: package a release, publish its download pages to S3
 - `actions/publish-release-notes`: put a GitHub release's notes on its download pages
+- `actions/builder-image`: build the image a build runs in and push it to GHCR
+- `actions/publish-archive`: bundle a build's prepared files and upload them to a private bucket
 
 A release workflow runs `python-release-checks` before it builds anything and
 `python-release-evidence` after the artifact is signed, with `audit: 'false'`
@@ -287,6 +289,124 @@ is a 403, which is an error, rather than a 404, which is the first release.
 Only `--root-index` writes the bucket root. Serialise release jobs with a
 `concurrency` group: two publishes racing on one manifest keep only the last.
 `robots.txt` belongs to the bucket's owner, not the tooling.
+
+## Release archives
+
+`tapio-build archive publish` keeps a build's outputs in a private bucket,
+one prefix per build, in the same shape as a download site:
+
+```
+<slug>/<archive-id>/<file>                              each file the build prepared
+<slug>/<archive-id>/build.json                          commit, builder image, workflow run, archive ID
+<slug>/<archive-id>/<zip>                               the files and build.json together
+<slug>/<archive-id>/<slug>-<archive-id>-builder.tar.gz  a release's builder image
+<slug>/<archive-id>/SHA256SUMS                          every file above, by bare name
+```
+
+The archive ID is the tag of a tag push, or the tag a manual run is given as
+`--release-tag`; any other run is `run-<number>-sha-<12-character commit>`. A
+build that is not a release is archived all the same - it is what a push to
+the default branch left - but only a release keeps the image it was built in,
+because the image is hundreds of megabytes and only a release is worth
+rebuilding byte for byte years later. The `run-` prefix is also what a
+lifecycle rule can expire without touching a release.
+
+The build decides what goes in and the tooling only names, bundles, sums and
+uploads it, so nothing about a particular product - its file formats, flash
+layout or build steps - lives here. Every file lands under its own name; two
+with one name, or one named like a file the archive writes itself, is an
+error. `SHA256SUMS` is uploaded last, so an archive that has one is whole, and
+`sha256sum -c SHA256SUMS` works in a downloaded copy of the prefix. A GitHub
+release carries the zip and `SHA256SUMS` but not the image; check it with
+`sha256sum -c --ignore-missing SHA256SUMS`.
+
+### Configure
+
+An `archive` table is enough on its own: a project without a Python or npm
+lock - firmware, say - needs no `ecosystems` table beside it. Bucket, region,
+role and retention are not configuration and stay in the consumer's
+repository variables.
+
+```toml
+[archive]
+product = "example-firmware"               # a configured product; optional when there is one
+slug = "example-firmware"                  # bucket prefix and file-name prefix: [a-z0-9-]
+zip = "example_firmware-${version}.zip"    # optional; "<slug>-${version}.zip" by default
+files = ["dist/package/firmware.hex"]      # project-relative globs; each must match a file
+```
+
+`${version}` in `zip` is the archive ID.
+
+### Run
+
+```bash
+tapio-build --project . archive names --release-tag v1.4.0
+tapio-build --project . archive publish --release-tag v1.4.0 \
+  --builder-image example-firmware-builder:local --bucket BUCKET --dry-run \
+  --output-dir /tmp/archive                                     # write it, list the uploads
+tapio-build --project . archive publish --output-dir /tmp/archive   # write it, no bucket at all
+```
+
+`names` prints `slug`, `archive-id`, `release-tag`, `builder-repository` and
+`builder-image` as `key=value` lines for `$GITHUB_OUTPUT`; outside Actions a
+`--release-tag` is required, since there is no run number to name the build
+by. `--retention-days` locks every upload in governance mode for that long;
+the bucket needs Object Lock enabled for it. Uploads go through the `aws` CLI
+with the credentials in the environment, and the output directory receives
+the archive under `<slug>/<archive-id>/`, `summary.json` and, given a bucket,
+`aws-commands.txt`.
+
+### GitHub Actions
+
+```yaml
+jobs:
+  builder:
+    permissions: {contents: read, packages: write}
+    outputs:
+      ref: ${{ steps.builder.outputs.ref }}
+    steps:
+      - uses: actions/checkout@<sha>
+      - uses: actions/setup-python@<sha>
+        with: {python-version: '3.12'}
+      - uses: Tapio-Measurement-Technologies/tapio-build-tooling/actions/builder-image@<sha>
+        id: builder
+
+  build:
+    needs: builder
+    permissions: {contents: write, packages: read, id-token: write}
+    steps:
+      # check out, pull ${{ needs.builder.outputs.ref }}, build and test in it,
+      # copy the files to archive where build-tooling.toml's archive.files says
+      - uses: actions/setup-python@<sha>
+        with: {python-version: '3.12'}
+      - uses: Tapio-Measurement-Technologies/tapio-build-tooling/actions/publish-archive@<sha>
+        id: archive
+        with:
+          release-tag: ${{ inputs.release_tag }}
+          builder-image: ${{ needs.builder.outputs.ref }}
+          bucket: ${{ github.event_name != 'pull_request' && vars.S3_ARCHIVE_BUCKET || '' }}
+          aws-region: ${{ vars.AWS_REGION }}
+          aws-role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME }}
+          retention-days: ${{ vars.S3_OBJECT_LOCK_RETENTION_DAYS }}
+```
+
+`builder-image` builds the Dockerfile in `context` as
+`ghcr.io/<owner>/<slug>-builder:sha-<commit>` and pushes it on every run, pull
+requests included, since the build that follows pulls it; only a push to the
+default branch also moves `latest`. It needs `packages: write` and no AWS
+access. `publish-archive` saves the builder image from the build job, after
+the build has passed, so a failed build never leaves half an archive; the
+job has therefore pulled the image already. An empty `bucket` writes the
+archive without uploading it, which is what a pull request gets. Outputs:
+`archive-id`, `release-tag` (empty unless a release), `zip-file`, `sums-file`,
+`archive-dir`, `summary-file` - enough to upload the archive as a workflow
+artifact and to attach the zip and `SHA256SUMS` to a GitHub release.
+
+Python comes from the calling workflow: the tooling will not install into the
+runner's system Python. The role needs only `s3:PutObject`,
+`s3:PutObjectRetention` and `s3:AbortMultipartUpload` under
+`<bucket>/<slug>/*`; nothing is read back. Serialise builds of one ref with a
+`concurrency` group, as a re-run of a release uploads the same keys again.
 
 ## License
 

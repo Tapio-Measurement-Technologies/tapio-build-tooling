@@ -16,6 +16,7 @@ from tapio_build_tools.downloads.package import (
     resolve_glob,
     tar_gz_file,
     zip_file,
+    zip_files,
 )
 from tests.downloads_support import RELEASED, FakeRunner
 
@@ -38,6 +39,8 @@ class PackageTests(unittest.TestCase):
         self.assertEqual(content_type("demo/index.html"), "text/html; charset=utf-8")
         self.assertEqual(content_type("a.exe"), "application/vnd.microsoft.portable-executable")
         self.assertEqual(content_type("a"), "application/octet-stream")
+        self.assertEqual(content_type("demo/v1.2.0/SHA256SUMS"), "text/plain; charset=utf-8")
+        self.assertEqual(content_type("firmware.hex"), "application/octet-stream")
 
     def test_a_pattern_must_name_exactly_one_file(self) -> None:
         self.assertEqual(resolve_glob(self.root, "dist/demo-${version}-*", "v1.2.0"), self.source)
@@ -53,6 +56,14 @@ class PackageTests(unittest.TestCase):
             self.assertEqual(archive.namelist(), ["demo-v1.2.0-linux"])
             self.assertEqual(archive.read("demo-v1.2.0-linux"), self.source.read_bytes())
         self.assertEqual([path.name for path in target.parent.iterdir()], ["demo.zip"])
+
+    def test_zip_files_holds_each_file_in_order(self) -> None:
+        second = self.root / "dist" / "build.json"
+        second.write_text("{}\n", encoding="utf-8")
+        target = zip_files([self.source, second], self.root / "out" / "both.zip", modified=RELEASED)
+        with zipfile.ZipFile(target) as archive:
+            self.assertEqual(archive.namelist(), ["demo-v1.2.0-linux", "build.json"])
+            self.assertEqual(archive.read("build.json"), b"{}\n")
 
     def test_tar_forces_the_executable_bit_and_no_owner(self) -> None:
         target = tar_gz_file(self.source, self.root / "out" / "demo.tar.gz", modified=RELEASED)

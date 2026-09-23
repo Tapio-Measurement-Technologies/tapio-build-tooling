@@ -18,6 +18,14 @@ operating systems. Product and program names in them are placeholders.
 | downloads-single-program | One GPL program, Windows only, source archive and SBOM published |
 | downloads-program-suite | One proprietary product, two programs, Windows and Linux |
 
+The `archive-*.toml` files show an `archive` table: a project whose builds are
+kept in a private bucket rather than offered for download, and which needs no
+package ecosystem.
+
+| Example | Shape |
+| --- | --- |
+| archive-firmware | One proprietary firmware image, no ecosystem, custom zip name |
+
 Lock-only groups cannot be regenerated. Every locked component is conservatively
 connected as direct root dependency. Add input files later to enable lock freshness
 checks and precise direct dependency graphs.

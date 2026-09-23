@@ -9,6 +9,9 @@ from pathlib import Path
 import sys
 import tempfile
 
+from tapio_build_tools.archive import ArchiveError
+from tapio_build_tools.archive.publish import names as archive_names
+from tapio_build_tools.archive.publish import publish_archive
 from tapio_build_tools.config import ConfigError, load_config
 from tapio_build_tools.cooldown import CooldownError, cutoff, timestamp
 from tapio_build_tools.downloads import DownloadsError
@@ -129,6 +132,21 @@ def build_parser() -> argparse.ArgumentParser:
     render.add_argument("--program", required=True, help="configured program ID")
     render.add_argument("--manifest", type=Path, required=True, help="releases.json to render")
     render.add_argument("--output-dir", type=Path, required=True, help="where the pages are written")
+
+    archive = commands.add_parser("archive", help="private build archive operations")
+    archive_commands = archive.add_subparsers(dest="archive_command", required=True)
+    release_tag_help = "archive this run as a release of TAG; a tag push is a release of its own tag"
+    names = archive_commands.add_parser("names", help="print this build's archive ID, release tag and builder image")
+    names.add_argument("--release-tag", help=release_tag_help)
+    archive_publish = archive_commands.add_parser("publish", help="bundle the prepared files and upload them to the archive bucket")
+    archive_publish.add_argument("--release-tag", help=release_tag_help)
+    archive_publish.add_argument("--builder-image", help="image the build ran in; recorded, and kept with a release")
+    archive_publish.add_argument("--bucket", help="S3 bucket name; without one the archive is only written locally")
+    archive_publish.add_argument("--output-dir", type=Path, help="where the archive is written; a new temporary directory by default")
+    archive_publish.add_argument("--retention-days", type=int, help="lock every upload in governance mode for this many days")
+    archive_publish.add_argument("--dry-run", action="store_true", help="write the archive and list the uploads without uploading")
+    archive_publish.add_argument("--commit", help="source commit SHA")
+    archive_publish.add_argument("--aws-region", help="region passed to the aws CLI")
     return parser
 
 
@@ -278,7 +296,31 @@ def main(argv: list[str] | None = None) -> int:
             )
             print(f"Rendered {len(pages)} page(s) into {args.output_dir}")
             return 0
+        if args.command == "archive" and args.archive_command == "names":
+            print(archive_names(config, release_tag=args.release_tag).lines(), end="")
+            return 0
+        if args.command == "archive" and args.archive_command == "publish":
+            output_dir = args.output_dir or Path(tempfile.mkdtemp(prefix="tapio-archive-"))
+            summary = publish_archive(
+                config,
+                output_dir=output_dir,
+                release_tag=args.release_tag,
+                builder_image=args.builder_image,
+                bucket=args.bucket,
+                aws_region=args.aws_region,
+                retention_days=args.retention_days,
+                dry_run=args.dry_run,
+                commit=args.commit,
+            )
+            if not args.bucket:
+                print(f"Archived {summary.prefix} without uploading; no bucket given")
+            else:
+                verb = "Would upload" if args.dry_run else "Uploaded"
+                print(f"{verb} {summary.prefix}: {len(summary.files)} file(s)")
+            print(f"Archive and summary: {output_dir}")
+            return 0
     except (
+        ArchiveError,
         AuditError,
         ConfigError,
         CooldownError,

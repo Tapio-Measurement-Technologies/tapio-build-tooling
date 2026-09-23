@@ -130,6 +130,21 @@ class Downloads:
 
 
 @dataclass(frozen=True)
+class Archive:
+    """A build's outputs, kept in a private bucket under one prefix per build.
+
+    The pipeline prepares the files; *files* names them, and every file a
+    pattern matches is archived under its own name. *zip* names the zip that
+    bundles them, ${version} standing for the archive ID.
+    """
+
+    product: Product
+    slug: str
+    zip: str
+    files: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class Config:
     project: Path
     path: Path
@@ -138,6 +153,7 @@ class Config:
     python: PythonEcosystem | None
     node: NodeEcosystem | None
     downloads: Downloads | None = None
+    archive: Archive | None = None
 
     def require_python(self) -> PythonEcosystem:
         if self.python is None:
@@ -153,6 +169,11 @@ class Config:
         if self.downloads is None:
             raise ConfigError("downloads are not configured")
         return self.downloads
+
+    def require_archive(self) -> Archive:
+        if self.archive is None:
+            raise ConfigError("archive is not configured")
+        return self.archive
 
     def product(self, product_id: str | None) -> Product:
         if product_id is None:
@@ -224,7 +245,9 @@ def load_config(
         raise ConfigError(f"invalid TOML in {path}: {exc}") from exc
 
     _keys(
-        data, {"schema-version", "organization", "products", "ecosystems", "downloads"}, "top-level"
+        data,
+        {"schema-version", "organization", "products", "ecosystems", "downloads", "archive"},
+        "top-level",
     )
     if data.get("schema-version") != 1:
         raise ConfigError(f"unsupported schema-version: {data.get('schema-version')!r}")
@@ -264,9 +287,11 @@ def load_config(
             component_type=component_type,
         )
 
-    ecosystems_data = _table(data.get("ecosystems"), "ecosystems")
+    # A firmware repository has no package ecosystem to lock or audit; its
+    # archive is reason enough for a configuration.
+    ecosystems_data = _table(data.get("ecosystems", {} if "archive" in data else None), "ecosystems")
     _keys(ecosystems_data, {"python", "node"}, "ecosystems")
-    if not ecosystems_data:
+    if not ecosystems_data and "archive" not in data:
         raise ConfigError("at least one ecosystem must be configured")
 
     python: PythonEcosystem | None = None
@@ -344,6 +369,10 @@ def load_config(
     if "downloads" in data:
         downloads = _load_downloads(project_root, data["downloads"], products)
 
+    archive: Archive | None = None
+    if "archive" in data:
+        archive = _load_archive(project_root, data["archive"], products)
+
     return Config(
         project=project_root,
         path=path,
@@ -352,6 +381,7 @@ def load_config(
         python=python,
         node=node,
         downloads=downloads,
+        archive=archive,
     )
 
 
@@ -389,13 +419,26 @@ def _contact(table: dict[str, Any], label: str) -> str | None:
     return _email(table, "contact", label)
 
 
-def _asset_pattern(project: Path, table: dict[str, Any], key: str, label: str) -> str:
-    """A project-relative path that may name the version as ${version}.
+def _program_product(table: dict[str, Any], label: str, products: dict[str, Product]) -> Product:
+    """The product *table* names, or the only one configured."""
+    product_id = _optional_string(table, "product", label)
+    if product_id is None:
+        if len(products) != 1:
+            raise ConfigError(f"{label}.product is required when multiple products are configured")
+        return next(iter(products.values()))
+    if product_id in products:
+        return products[product_id]
+    raise ConfigError(f"{label}.product is unknown: {product_id}; configured: {', '.join(products)}")
 
-    Only checked for shape here: the file exists once the build has run, which
-    is after the configuration was validated.
-    """
-    value = _required_string(table, key, label)
+
+def _slug(table: dict[str, Any], label: str) -> str:
+    slug = _required_string(table, "slug", label)
+    if not SLUG_PATTERN.match(slug):
+        raise ConfigError(f"{label}.slug must be lower-case letters, digits and hyphens: {slug}")
+    return slug
+
+
+def _version_template(value: str, key: str, label: str) -> None:
     template = Template(value)
     if not template.is_valid():
         raise ConfigError(f"{label}.{key} is not a valid pattern: {value}")
@@ -405,6 +448,16 @@ def _asset_pattern(project: Path, table: dict[str, Any], key: str, label: str) -
             f"{label}.{key} uses unknown placeholder(s) {', '.join(unknown)};"
             f" only ${{{VERSION_PLACEHOLDER}}} is substituted"
         )
+
+
+def _asset_pattern(project: Path, table: dict[str, Any], key: str, label: str) -> str:
+    """A project-relative path that may name the version as ${version}.
+
+    Only checked for shape here: the file exists once the build has run, which
+    is after the configuration was validated.
+    """
+    value = _required_string(table, key, label)
+    _version_template(value, key, label)
     _project_path(project, value, f"{label}.{key}", must_exist=False)
     return value
 
@@ -451,19 +504,8 @@ def _load_downloads(project: Path, raw: Any, products: dict[str, Product]) -> Do
         program_data = _table(raw_program, label)
         _keys(program_data, program_keys, label)
 
-        product_id = _optional_string(program_data, "product", label)
-        if product_id is None:
-            if len(products) != 1:
-                raise ConfigError(f"{label}.product is required when multiple products are configured")
-            product = next(iter(products.values()))
-        elif product_id in products:
-            product = products[product_id]
-        else:
-            raise ConfigError(f"{label}.product is unknown: {product_id}; configured: {', '.join(products)}")
-
-        slug = _required_string(program_data, "slug", label)
-        if not SLUG_PATTERN.match(slug):
-            raise ConfigError(f"{label}.slug must be lower-case letters, digits and hyphens: {slug}")
+        product = _program_product(program_data, label, products)
+        slug = _slug(program_data, label)
         if slug in slugs:
             raise ConfigError(f"{label}.slug duplicates downloads.programs.{slugs[slug]}: {slug}")
         slugs[slug] = program_id
@@ -511,3 +553,27 @@ def _load_downloads(project: Path, raw: Any, products: dict[str, Product]) -> Do
             support_years=support_years,
         )
     return Downloads(programs=programs, logo=logo)
+
+
+def _load_archive(project: Path, raw: Any, products: dict[str, Product]) -> Archive:
+    label = "archive"
+    data = _table(raw, label)
+    _keys(data, {"product", "slug", "zip", "files"}, label)
+    product = _program_product(data, label, products)
+    slug = _slug(data, label)
+
+    zip_name = _optional_string(data, "zip", label) or f"{slug}-${{{VERSION_PLACEHOLDER}}}.zip"
+    _version_template(zip_name, "zip", label)
+    if "/" in zip_name or "\\" in zip_name or not zip_name.endswith(".zip"):
+        raise ConfigError(f"{label}.zip must be a file name ending in .zip: {zip_name}")
+
+    raw_files = data.get("files")
+    if not isinstance(raw_files, list) or not raw_files:
+        raise ConfigError(f"{label}.files must be a non-empty array")
+    files: list[str] = []
+    for index, value in enumerate(raw_files):
+        if not isinstance(value, str) or not value.strip():
+            raise ConfigError(f"{label}.files[{index}] must be a non-empty string")
+        _project_path(project, value, f"{label}.files[{index}]", must_exist=False)
+        files.append(value)
+    return Archive(product=product, slug=slug, zip=zip_name, files=tuple(files))

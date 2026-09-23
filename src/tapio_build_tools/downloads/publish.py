@@ -100,12 +100,15 @@ class S3Client:
             raise DownloadsError(f"fetching s3://{self.bucket}/{key} failed: {detail.strip() or exc}") from exc
         return True
 
-    def put(self, path: Path, key: str, cache_control: str) -> None:
+    def put(self, path: Path, key: str, cache_control: str, *, retain_until: str | None = None) -> None:
+        """Upload *path* as *key*; with *retain_until*, locked in governance mode until then."""
         args = [
             "s3", "cp", str(path), f"s3://{self.bucket}/{key}",
             "--content-type", content_type(key),
             "--cache-control", cache_control,
         ]
+        if retain_until is not None:
+            args += ["--object-lock-mode", "GOVERNANCE", "--object-lock-retain-until-date", retain_until]
         try:
             self._run(args, write=True)
         except subprocess.CalledProcessError as exc:

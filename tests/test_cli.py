@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import patch
 
 from tapio_build_tools.cli import main
+from tests.archive_support import ACTIONS, write_archive_project
 from tests.downloads_support import write_project
 
 
@@ -148,6 +149,46 @@ lock = "package-lock.json"
                 ])
             self.assertEqual(result, 2)
             self.assertIn("is a pre-release; not published", stderr.getvalue())
+            self.assertNotIn("Traceback", stderr.getvalue())
+
+    def test_archive_names_are_printed_for_github_output(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_archive_project(root)
+            with patch.dict("os.environ", ACTIONS, clear=False), redirect_stdout(StringIO()) as out:
+                result = main(["--project", str(root), "archive", "names", "--release-tag", "v1.3.0"])
+            self.assertEqual(result, 0)
+            self.assertIn("archive-id=v1.3.0\nrelease-tag=v1.3.0\n", out.getvalue())
+
+    @patch("tapio_build_tools.cli.publish_archive")
+    def test_dispatches_archive_publish(self, publish_archive) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_archive_project(root)
+            publish_archive.return_value = SimpleNamespace(prefix="gadget/v1.2.0", files=[1, 2, 3])
+            with redirect_stdout(StringIO()) as out:
+                result = main([
+                    "--project", str(root), "archive", "publish", "--release-tag", "v1.2.0",
+                    "--builder-image", "gadget-builder:local", "--bucket", "bucket", "--retention-days", "365",
+                    "--output-dir", str(root / "out"), "--dry-run", "--aws-region", "eu-north-1",
+                ])
+            self.assertEqual(result, 0)
+            options = publish_archive.call_args.kwargs
+            self.assertEqual(options["release_tag"], "v1.2.0")
+            self.assertEqual(options["builder_image"], "gadget-builder:local")
+            self.assertEqual(options["retention_days"], 365)
+            self.assertTrue(options["dry_run"])
+            self.assertIn("Would upload gadget/v1.2.0: 3 file(s)", out.getvalue())
+
+    def test_an_archive_that_cannot_be_named_fails_without_a_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_archive_project(root)
+            stderr = StringIO()
+            with patch.dict("os.environ", {}, clear=True), redirect_stderr(stderr):
+                result = main(["--project", str(root), "archive", "publish", "--commit", "abc"])
+            self.assertEqual(result, 2)
+            self.assertIn("--release-tag is required outside GitHub Actions", stderr.getvalue())
             self.assertNotIn("Traceback", stderr.getvalue())
 
 

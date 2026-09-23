@@ -1,0 +1,69 @@
+name: Build the builder image
+description: Build the container image a project's build runs in and push it to GitHub's container registry, tagged with the commit
+
+inputs:
+  config:
+    description: Configuration path relative to project root
+    default: build-tooling.toml
+  context:
+    description: Docker build context relative to project root; its Dockerfile is used
+    default: "."
+
+outputs:
+  ref:
+    description: The pushed image, ghcr.io/<owner>/<slug>-builder:sha-<commit>
+    value: ${{ steps.names.outputs.builder-image }}
+  repository:
+    description: The image without its tag
+    value: ${{ steps.names.outputs.builder-repository }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install build tooling from hashed lock
+      shell: bash
+      env:
+        TOOLING_ROOT: ${{ github.action_path }}/../..
+      run: |
+        python -m pip install --require-hashes -r "$TOOLING_ROOT/requirements.txt"
+        python -m pip install --no-deps --no-build-isolation "$TOOLING_ROOT"
+
+    - name: Validate archive configuration
+      shell: bash
+      env:
+        CONFIG: ${{ inputs.config }}
+      run: tapio-build --project "$GITHUB_WORKSPACE" --config "$CONFIG" config validate
+
+    - name: Name the image
+      id: names
+      shell: bash
+      env:
+        CONFIG: ${{ inputs.config }}
+      run: tapio-build --project "$GITHUB_WORKSPACE" --config "$CONFIG" archive names >> "$GITHUB_OUTPUT"
+
+    - name: Log in to the registry
+      shell: bash
+      env:
+        ACTOR: ${{ github.actor }}
+        TOKEN: ${{ github.token }}
+      run: echo "$TOKEN" | docker login ghcr.io --username "$ACTOR" --password-stdin
+
+    # Every run pushes the commit's tag, pull requests included: the build
+    # that follows pulls it. Only the default branch moves latest.
+    - name: Build and push the image
+      shell: bash
+      env:
+        CONTEXT: ${{ inputs.context }}
+        DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        REF: ${{ steps.names.outputs.builder-image }}
+        REPOSITORY: ${{ steps.names.outputs.builder-repository }}
+      run: |
+        set -euo pipefail
+        latest=false
+        if [[ -n "$DEFAULT_BRANCH" && "$GITHUB_REF" == "refs/heads/$DEFAULT_BRANCH" ]]; then latest=true; fi
+        tags=(--tag "$REF")
+        if [[ "$latest" == "true" ]]; then tags+=(--tag "$REPOSITORY:latest"); fi
+        docker build --pull "${tags[@]}" "$GITHUB_WORKSPACE/$CONTEXT"
+        docker push "$REF"
+        if [[ "$latest" == "true" ]]; then docker push "$REPOSITORY:latest"; fi
+        echo "Builder image: \`$REF\`" >> "$GITHUB_STEP_SUMMARY"

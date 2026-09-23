@@ -40,6 +40,12 @@ class ExampleCompatibilityTests(unittest.TestCase):
                 config = load_config(root, example)
                 self.assertTrue(config.require_downloads().programs)
 
+    def test_archive_examples_validate_without_an_ecosystem(self) -> None:
+        for example in sorted((ROOT / "examples").glob("archive-*.toml")):
+            with self.subTest(example=example.name), tempfile.TemporaryDirectory() as directory:
+                config = load_config(Path(directory), example)
+                self.assertTrue(config.require_archive().files)
+
     def test_examples_name_nobody_in_particular(self) -> None:
         """The repository is public: contacts in examples are placeholders."""
         for example in (ROOT / "examples").glob("*.toml"):

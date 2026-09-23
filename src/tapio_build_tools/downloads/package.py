@@ -34,6 +34,8 @@ CONTENT_TYPES = {
 
 def content_type(path: Path | str) -> str:
     name = str(path).lower()
+    if name.rsplit("/", 1)[-1] == "sha256sums":
+        return "text/plain; charset=utf-8"
     for suffix, value in CONTENT_TYPES.items():
         if name.endswith(suffix):
             return value
@@ -90,15 +92,24 @@ def zip_file(source: Path, target: Path, *, modified: str) -> Path:
     packaged twice gives the same bytes, so publishing a release again after
     a failure part-way finds the files it already uploaded unchanged.
     """
+    return zip_files([source], target, modified=modified)
+
+
+def zip_files(sources: list[Path], target: Path, *, modified: str) -> Path:
+    """*target*: a zip holding each of *sources* under its own name, in order.
+
+    Dated *modified* throughout, for the same reason as :func:`zip_file`.
+    """
     moment = datetime.fromtimestamp(_epoch(modified))
 
     def write(temporary: Path) -> None:
-        info = zipfile.ZipInfo(source.name, date_time=moment.timetuple()[:6])
-        info.compress_type = zipfile.ZIP_DEFLATED
-        info.external_attr = 0o755 << 16
-        with zipfile.ZipFile(temporary, "w") as archive, source.open("rb") as stream:
-            with archive.open(info, "w") as member:
-                shutil.copyfileobj(stream, member, 1024 * 1024)
+        with zipfile.ZipFile(temporary, "w") as archive:
+            for source in sources:
+                info = zipfile.ZipInfo(source.name, date_time=moment.timetuple()[:6])
+                info.compress_type = zipfile.ZIP_DEFLATED
+                info.external_attr = 0o755 << 16
+                with source.open("rb") as stream, archive.open(info, "w") as member:
+                    shutil.copyfileobj(stream, member, 1024 * 1024)
 
     return _atomically(target, write)
 

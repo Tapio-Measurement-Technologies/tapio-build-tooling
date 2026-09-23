@@ -1,0 +1,17 @@
+# A firmware project with no package ecosystem to lock. Its build prepares the
+# one file a flashing station needs; every build is archived in a private
+# bucket under its own prefix, and a release keeps its builder image beside it.
+schema-version = 1
+
+[organization]
+name = "Example Oy"
+
+[products.example-firmware]
+name = "Example Firmware"
+license-name = "Proprietary"
+component-type = "firmware"
+
+[archive]
+slug = "example-firmware"
+zip = "example_firmware-${version}.zip"          # optional; "<slug>-${version}.zip" by default
+files = ["dist/package/firmware.hex"]            # what the build prepared, archived under its own name

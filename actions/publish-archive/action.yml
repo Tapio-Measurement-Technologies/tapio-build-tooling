@@ -1,0 +1,112 @@
+name: Publish a build archive
+description: Bundle the files a build prepared with build.json, a zip and SHA256SUMS, and upload them to a private S3 bucket under one prefix per build
+
+inputs:
+  config:
+    description: Configuration path relative to project root
+    default: build-tooling.toml
+  release-tag:
+    description: Archive this run as a release of this tag; a tag push is a release of its own tag
+    default: ""
+  builder-image:
+    description: The image the build ran in; recorded in build.json, and saved beside a release
+    default: ""
+  bucket:
+    description: S3 bucket name; keep it in a repository variable. Empty writes the archive without uploading it
+    default: ""
+  aws-role-to-assume:
+    description: IAM role ARN assumed through OIDC before uploading; empty uses the credentials already in the environment
+    default: ""
+  aws-region:
+    description: AWS region for the role and the aws CLI
+    default: ""
+  retention-days:
+    description: Lock every upload in governance mode for this many days; empty locks nothing
+    default: ""
+  dry-run:
+    description: Write the archive, list the uploads, upload nothing
+    default: "false"
+  output-dir:
+    description: Where the archive and its summary are written; a directory under the runner's temp by default
+    default: ""
+
+outputs:
+  archive-id:
+    description: The release tag, or run-<number>-sha-<commit> for a build that is not a release
+    value: ${{ steps.publish.outputs.archive-id }}
+  release-tag:
+    description: The release tag; empty for a build that is not a release
+    value: ${{ steps.publish.outputs.release-tag }}
+  zip-file:
+    description: Path of the zip holding the files and build.json
+    value: ${{ steps.publish.outputs.zip-file }}
+  sums-file:
+    description: Path of SHA256SUMS
+    value: ${{ steps.publish.outputs.sums-file }}
+  archive-dir:
+    description: Directory holding every file of this build's archive
+    value: ${{ steps.publish.outputs.archive-dir }}
+  summary-file:
+    description: JSON summary of the archive
+    value: ${{ steps.publish.outputs.summary-file }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install build tooling from hashed lock
+      shell: bash
+      env:
+        TOOLING_ROOT: ${{ github.action_path }}/../..
+      run: |
+        python -m pip install --require-hashes -r "$TOOLING_ROOT/requirements.txt"
+        python -m pip install --no-deps --no-build-isolation "$TOOLING_ROOT"
+
+    - name: Validate archive configuration
+      shell: bash
+      env:
+        CONFIG: ${{ inputs.config }}
+      run: tapio-build --project "$GITHUB_WORKSPACE" --config "$CONFIG" config validate
+
+    # A pull request's build is archived without a bucket: it is kept as a
+    # workflow artifact and needs no credentials.
+    - name: Authenticate to AWS
+      if: ${{ inputs.bucket != '' && inputs.aws-role-to-assume != '' }}
+      uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c
+      with:
+        role-to-assume: ${{ inputs.aws-role-to-assume }}
+        aws-region: ${{ inputs.aws-region }}
+
+    - name: Publish the archive
+      id: publish
+      shell: bash
+      env:
+        AWS_REGION_INPUT: ${{ inputs.aws-region }}
+        BUCKET: ${{ inputs.bucket }}
+        BUILDER_IMAGE: ${{ inputs.builder-image }}
+        CONFIG: ${{ inputs.config }}
+        DRY_RUN: ${{ inputs.dry-run }}
+        OUTPUT_DIR: ${{ inputs.output-dir }}
+        RELEASE_TAG: ${{ inputs.release-tag }}
+        RETENTION_DAYS: ${{ inputs.retention-days }}
+      run: |
+        set -euo pipefail
+        if [[ -z "$OUTPUT_DIR" ]]; then OUTPUT_DIR="$RUNNER_TEMP/tapio-archive"; fi
+        args=(--output-dir "$OUTPUT_DIR" --commit "$GITHUB_SHA")
+        if [[ -n "$RELEASE_TAG" ]]; then args+=(--release-tag "$RELEASE_TAG"); fi
+        if [[ -n "$BUILDER_IMAGE" ]]; then args+=(--builder-image "$BUILDER_IMAGE"); fi
+        if [[ -n "$BUCKET" ]]; then args+=(--bucket "$BUCKET"); fi
+        if [[ -n "$AWS_REGION_INPUT" ]]; then args+=(--aws-region "$AWS_REGION_INPUT"); fi
+        if [[ -n "$RETENTION_DAYS" ]]; then args+=(--retention-days "$RETENTION_DAYS"); fi
+        if [[ "$DRY_RUN" == "true" ]]; then args+=(--dry-run); fi
+        tapio-build --project "$GITHUB_WORKSPACE" --config "$CONFIG" archive publish "${args[@]}" | tee -a "$GITHUB_STEP_SUMMARY"
+
+        summary="$OUTPUT_DIR/summary.json"
+        prefix="$(jq -r '.prefix' "$summary")"
+        {
+          echo "archive-id=$(jq -r '.archive_id' "$summary")"
+          echo "release-tag=$(jq -r '.release_tag' "$summary")"
+          echo "zip-file=$(jq -r '.zip' "$summary")"
+          echo "sums-file=$(jq -r '.sums' "$summary")"
+          echo "archive-dir=$OUTPUT_DIR/$prefix"
+          echo "summary-file=$summary"
+        } >> "$GITHUB_OUTPUT"
