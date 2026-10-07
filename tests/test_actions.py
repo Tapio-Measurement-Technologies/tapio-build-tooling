@@ -20,6 +20,7 @@ class ActionTests(unittest.TestCase):
             ROOT / "actions/publish-release-notes/action.yml",
             ROOT / "actions/builder-image/action.yml",
             ROOT / "actions/publish-archive/action.yml",
+            ROOT / "actions/sign-module/action.yml",
         ]
         uses = []
         for path in files:
@@ -94,11 +95,29 @@ class ActionTests(unittest.TestCase):
         self.assertLess(action.index("archive names"), action.index("docker build"))
         self.assertNotIn("configure-aws-credentials", action)
 
+    def test_sign_module_signs_only_through_the_tooling(self) -> None:
+        """Login, then one command that signs, verifies and records - nothing else."""
+        action = (ROOT / "actions/sign-module" / "action.yml").read_text(encoding="utf-8")
+        self.assertLess(action.index("azure/login"), action.index("tapio-build signing sign"))
+        self.assertNotIn("az keyvault", action)
+        self.assertIn("--summary \"$GITHUB_STEP_SUMMARY\"", action)
+
+    def test_signing_code_carries_no_deployment_of_its_own(self) -> None:
+        for path in (ROOT / "src/tapio_build_tools/signing").glob("*.py"):
+            text = path.read_text(encoding="utf-8")
+            for literal in ["vault.azure.net", "tapiotechnologies", "Tapio-Measurement-Technologies"]:
+                with self.subTest(file=path.name, literal=literal):
+                    self.assertNotIn(literal, text)
+            self.assertIsNone(re.search(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", text),
+                              f"a GUID in {path.name}")
+
     def test_publish_downloads_carries_no_deployment_of_its_own(self) -> None:
         """The tooling is public; buckets, roles and addresses belong to the consumer."""
-        for name in ["publish-downloads", "publish-release-notes", "publish-archive", "builder-image"]:
+        for name in ["publish-downloads", "publish-release-notes", "publish-archive", "builder-image",
+                     "sign-module"]:
             action = (ROOT / "actions" / name / "action.yml").read_text(encoding="utf-8")
-            for literal in ["arn:aws:", "amazonaws.com", "s3://", "tapiotechnologies"]:
+            for literal in ["arn:aws:", "amazonaws.com", "s3://", "tapiotechnologies",
+                            "vault.azure.net", "/subscriptions/"]:
                 with self.subTest(action=name, literal=literal):
                     self.assertNotIn(literal, action)
             self.assertIsNone(re.search(r"[\w.-]+@[\w-]+\.\w+", action), f"an email address in {name}")
