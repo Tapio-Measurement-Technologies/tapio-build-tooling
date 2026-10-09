@@ -117,6 +117,7 @@ delays a fix rather than hiding the need for one.
 - `actions/publish-release-notes`: put a GitHub release's notes on its download pages
 - `actions/builder-image`: build the image a build runs in and push it to GHCR
 - `actions/publish-archive`: bundle a build's prepared files and upload them to a private bucket
+- `actions/sign-module`: sign one module with a key in Azure Key Vault, verify it, record it
 
 A release workflow runs `python-release-checks` before it builds anything and
 `python-release-evidence` after the artifact is signed, with `audit: 'false'`
@@ -414,3 +415,107 @@ runner's system Python. The role needs only `s3:PutObject`,
 ## License
 
 GPL-3.0-or-later. See `LICENSE`.
+
+## Module signing
+
+A product that loads code at runtime - plug-ins, postprocessors - can require
+that code to be signed. The keys live in one Azure Key Vault shared by every
+product; each product gets its own:
+
+```
+<product>-<year>a   active key: the only one its signing pipeline may use
+<product>-<year>b   standby: pinned by the product, disabled in the vault
+```
+
+and its own signing identity: an app registration whose one federated
+credential is one GitHub environment in the product's repository, and whose one
+role is Key Vault Crypto User on that product's active key. A key per product
+keeps a leak of one product's pipeline from signing what another product
+would load; a signing context the product prefixes cannot, because whoever
+signs chooses it.
+
+### The builder
+
+What a signed module looks like - its manifest, the context its digest is
+taken over, its file format, the keys that verify it - belongs to the product,
+which ships the verifier. The product supplies a builder command answering:
+
+```
+<builder> manifest --source DIR --out MANIFEST [--created ISO8601]
+<builder> digest --manifest MANIFEST       SHA-256 to sign, standard base64 with padding
+<builder> pack --source DIR --manifest MANIFEST --key-id ID --signature=SIG --out FILE
+<builder> verify --file FILE                checks FILE against the product's pinned keys
+                                            and prints {"id", "version", "key_id"}
+```
+
+`az keyvault key sign --digest` passes its argument to Python's
+`base64.b64decode`, so the digest must be standard base64; unpadded base64url
+fails there with "Incorrect padding". The CLI prints the signature under
+`signature`, in standard base64.
+
+### Provision a product
+
+```bash
+tapio-build signing provision \
+  --subscription SUBSCRIPTION_ID --resource-group RG --location REGION \
+  --vault VAULT --product PRODUCT --repository OWNER/NAME --reviewer LOGIN \
+  [--canary-builder "python scripts/build_module.py" \
+   --canary-source path/to/canary --canary-dir path/to/canaries] \
+  --dry-run
+```
+
+Creates what is missing and leaves what is right: the Key Vault provider
+registration, the group, the vault (Standard, Azure RBAC, purge protection,
+90-day soft delete), both keys, a canary per key if asked, the identity, its
+federated credential, its role on the active key, and the GitHub environment -
+limited to one branch, a named reviewer, with the identity's IDs as secrets
+and `SIGNING_VAULT` and `SIGNING_KEY_NAME` as variables. `--no-reviewer`
+sets the environment up without a reviewer instead, and anyone who can push to
+the branch can then sign. It prints the public keys in the form a product's key
+table holds them.
+
+The signed-in user is given Key Vault Crypto Officer on the vault for the run
+and loses it at the end, even when a step fails (`--keep-admin` keeps it). A
+rerun changes nothing except that role and enabling the standby long enough to
+read its public key. `--dry-run` performs every lookup and prints every change
+instead of making it. Purge protection cannot be turned off once the vault
+has it; to try a new setup out first, pass `--no-purge-protection`, and run
+again without it once everything works - that run turns it on.
+
+Nothing about a deployment lives here. Keep the concrete invocation - which
+subscription, vault, products and reviewers - in the product's private
+repository.
+
+### Sign in a workflow
+
+```yaml
+jobs:
+  sign:
+    runs-on: ubuntu-latest
+    environment: module-signing
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@<sha>
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@<sha>
+        with:
+          python-version: "3.12"
+      - uses: Tapio-Measurement-Technologies/tapio-build-tooling/actions/sign-module@<sha>
+        with:
+          builder: python scripts/build_module.py
+          source: modules/example
+          output: dist/example.tpp
+          vault: ${{ vars.SIGNING_VAULT }}
+          key-name: ${{ vars.SIGNING_KEY_NAME }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+```
+
+The action verifies the signed file with the product's own builder before
+calling it signed, so a key the product does not pin stops the run, and writes
+a record - id, version, key, manifest and file SHA-256, commit, run - to the
+job summary and to `signing-record.json`.
