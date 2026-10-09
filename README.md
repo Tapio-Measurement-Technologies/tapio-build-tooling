@@ -222,7 +222,10 @@ manifest. The output directory receives the site tree, `summary.json`,
 `aws-commands.txt`. `--root-index` also writes a bucket-root `index.html`
 listing every program that has a manifest; `tapio-build downloads root-index
 --bucket BUCKET` writes that page on its own, for a hand that can write the
-root when the release roles cannot.
+root when the release roles cannot. The page reads each program's
+`releases.json` in the browser and shows the newest release it names, so a
+release that cannot write the root still shows there; run `root-index` again
+only to add a program or rename one.
 
 ### Release notes
 

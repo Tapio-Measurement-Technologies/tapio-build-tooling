@@ -69,6 +69,8 @@ class ManifestTests(unittest.TestCase):
         manifest = merge_release(manifest, release("v1.1.10"))
         self.assertEqual([item.version for item in manifest.releases], ["v1.3.0", "v1.2.3", "v1.1.10"])
         self.assertEqual(latest(manifest).version, "v1.3.0")
+        # The bucket-root page takes the first release written as the latest.
+        self.assertEqual(json.loads(dump_manifest(manifest))["releases"][0]["version"], "v1.3.0")
 
     def test_publishing_the_same_files_again_changes_nothing(self) -> None:
         first = merge_release(self.empty, release("v1.3.0", released="2026-01-01T00:00:00Z"))

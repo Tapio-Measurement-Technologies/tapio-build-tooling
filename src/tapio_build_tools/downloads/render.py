@@ -4,7 +4,8 @@ Every page is complete on its own: the stylesheet is inline, the logo is
 inlined, and nothing is fetched from anywhere else, so the page looks the
 same behind a customer's proxy as it does here. Links between pages and to
 the files are relative, so the same tree works from a bucket and from a
-directory opened in a browser.
+directory opened in a browser. The bucket-root page alone reads something
+more - each program's manifest beside it - and is whole without it too.
 """
 
 from __future__ import annotations
@@ -47,6 +48,40 @@ SCRIPT = """\
     mine[i].classList.add("is-yours");
     list.insertBefore(mine[i], list.firstChild);
   }
+})();
+</script>
+"""
+
+# Brings each program's row on the bucket-root page up to its newest release.
+# A release role cannot write the root, so the page is as old as the last
+# hand that could; the manifests beside it are as new as the last release.
+# The manifest lists its releases newest first, so the first is the latest.
+# Without the manifests - opened from disk, or a fetch that fails - the rows
+# stay as they were written.
+ROOT_SCRIPT = """\
+<script>
+(function () {
+  if (!window.fetch) { return; }
+  var months = ["January", "February", "March", "April", "May", "June", "July",
+                "August", "September", "October", "November", "December"];
+  var rows = document.querySelectorAll("tr[data-slug]");
+  Array.prototype.forEach.call(rows, function (row) {
+    fetch(row.getAttribute("data-slug") + "/releases.json")
+      .then(function (response) {
+        if (!response.ok) { throw new Error(response.status); }
+        return response.json();
+      })
+      .then(function (manifest) {
+        if (manifest.listed === false) { row.parentNode.removeChild(row); return; }
+        var newest = manifest.releases && manifest.releases[0];
+        var released = newest && new Date(newest.released);
+        if (!released || isNaN(released.getTime())) { return; }
+        row.cells[1].textContent = newest.version;
+        row.cells[2].textContent = released.getUTCDate() + " " + months[released.getUTCMonth()] +
+          " " + released.getUTCFullYear();
+      })
+      .catch(function () {});
+  });
 })();
 </script>
 """
@@ -257,7 +292,7 @@ def _render(
     main: str,
     footer: str,
     logo: str | None,
-    script: bool,
+    script: str,
 ) -> str:
     indexable = program_or_none.indexable if program_or_none is not None else False
     logo_tag = (
@@ -269,7 +304,7 @@ def _render(
         logo=logo_tag,
         main=main,
         footer=footer,
-        script=SCRIPT if script else "",
+        script=script,
     )
 
 
@@ -297,7 +332,7 @@ def render_program_pages(
                 main=_release_body(latest_key, program, manifest, newest, newest),
                 footer=f"This page always offers the latest release of {_escape(program.name)}.<br>\n{footer_note}",
                 logo=logo_uri,
-                script=True,
+                script=SCRIPT,
             ),
         )
     )
@@ -312,7 +347,7 @@ def render_program_pages(
                     main=_release_body(key, program, manifest, release, newest),
                     footer=footer_note,
                     logo=logo_uri,
-                    script=True,
+                    script=SCRIPT,
                 ),
             )
         )
@@ -354,7 +389,7 @@ def render_program_pages(
                 main=versions_main,
                 footer=footer_note,
                 logo=logo_uri,
-                script=False,
+                script="",
             ),
         )
     )
@@ -362,14 +397,18 @@ def render_program_pages(
 
 
 def render_root_page(manifests: list[Manifest], organization: str, logo: Path | None = None) -> Page:
-    """The page at the root of the bucket: one line per program."""
+    """The page at the root of the bucket: one line per program.
+
+    The rows are as new as *manifests*; in a browser, ROOT_SCRIPT brings each
+    up to the newest release its manifest names.
+    """
     rows = []
     for manifest in sorted(manifests, key=lambda item: item.name.lower()):
         newest = latest(manifest)
         if newest is None or not manifest.listed:
             continue
         rows.append(
-            "<tr>"
+            f'<tr data-slug="{_escape(manifest.slug)}">'
             f'<td><a href="{_escape(manifest.slug)}/index.html">{_escape(manifest.name)}</a></td>'
             f"<td>{_escape(newest.version)}</td>"
             f"<td>{_escape(released_on(newest.released))}</td>"
@@ -389,6 +428,6 @@ def render_root_page(manifests: list[Manifest], organization: str, logo: Path | 
             main=main,
             footer=_escape(organization),
             logo=logo_data_uri(logo) if logo else None,
-            script=False,
+            script=ROOT_SCRIPT,
         ),
     )

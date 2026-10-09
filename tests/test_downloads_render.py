@@ -191,9 +191,20 @@ class RenderTests(unittest.TestCase):
         self.assertIn("<title>Downloads</title>", page)
         self.assertIn("<h1>Downloads</h1>", page)
         self.assertIn('<p class="eyebrow">Example Oy</p>', page)
-        self.assertIn('<a href="demo/index.html">Demo Program</a></td><td>v1.3.0</td>', page)
+        self.assertIn(
+            '<tr data-slug="demo"><td><a href="demo/index.html">Demo Program</a></td><td>v1.3.0</td>', page
+        )
         self.assertNotIn("Hidden Program", page)
-        self.assertEqual(page.count("<tr>"), 2)  # header row plus one program; empty and unlisted are left out
+        self.assertEqual(page.count("<tr"), 2)  # header row plus one program; empty and unlisted are left out
+
+    def test_the_root_page_reads_the_manifests_beside_it_and_nothing_else(self) -> None:
+        """A release role cannot write the root, so the page catches up with the manifests itself."""
+        page = render_root_page([self.manifest], "Example Oy").html
+        script = page.split("<script>")[-1].split("</script>")[0]
+        self.assertIn('fetch(row.getAttribute("data-slug") + "/releases.json")', script)
+        self.assertIn("manifest.releases[0]", script)
+        self.assertNotIn("http", script)
+        self.assertNotIn("innerHTML", script)  # a manifest's text is never read as markup
 
 
 if __name__ == "__main__":
