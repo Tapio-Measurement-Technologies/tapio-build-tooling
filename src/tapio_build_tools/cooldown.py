@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import json
-from typing import Callable, Iterable, TypeVar
+from typing import Callable, Iterable, Mapping, TypeVar
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -41,9 +41,13 @@ def published(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
 
 
-def fetch_json(url: str, *, missing: str) -> dict:
-    """The JSON document at *url*; *missing* is the error raised for a 404."""
-    request = Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
+def fetch_json(url: str, *, missing: str, headers: Mapping[str, str] | None = None) -> dict:
+    """The JSON document at *url*; *missing* is the error raised for a 404.
+
+    *headers* are added to the request: a token, for an API that takes one.
+    """
+    request = Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/json",
+                                    **(headers or {})})
     try:
         with urlopen(request, timeout=TIMEOUT_SECONDS) as response:
             return json.loads(response.read().decode("utf-8"))

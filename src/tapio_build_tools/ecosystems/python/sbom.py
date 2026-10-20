@@ -13,8 +13,10 @@ import sys
 import tempfile
 
 from packaging.requirements import Requirement
+from packaging.utils import canonicalize_name
 
 from tapio_build_tools.config import Config, Product
+from tapio_build_tools.ecosystems.python.pins import LockError, Pin, read_pins
 from tapio_build_tools.cyclonedx import validate_json
 from tapio_build_tools.evidence import (
     git_commit,
@@ -133,6 +135,30 @@ def connect_root_dependencies(
     root["dependsOn"] = sorted({*direct_refs, *additional_refs})
 
 
+def version_url_components(bom: dict, pins: list[Pin]) -> None:
+    """Give each wheel the lock pins by URL the version and hash it was pinned at.
+
+    cyclonedx-py reads a URL requirement as a name and a download URL: the
+    component has no version and its purl names none, which leaves the one
+    first-party library in a product's bill of materials as the one entry it
+    cannot say anything about. The lock's pin, read from the wheel's own file
+    name, says which release it is, and the lock's hash which file.
+    """
+    by_name = {pin.name: pin for pin in pins if pin.url}
+    for component in bom.get("components", []):
+        purl = component.get("purl", "")
+        if not purl.startswith("pkg:pypi/") or component.get("version"):
+            continue
+        pin = by_name.get(canonicalize_name(component.get("name", "")))
+        if pin is None:
+            continue
+        name, _, qualifiers = purl[len("pkg:pypi/"):].partition("?")
+        component["version"] = pin.version
+        component["purl"] = f"pkg:pypi/{name}@{pin.version}" + (f"?{qualifiers}" if qualifiers else "")
+        [digest] = pin.hashes
+        component["hashes"] = [{"alg": "SHA-256", "content": digest}]
+
+
 def _run_cyclonedx(lock: Path, output: Path, spec_version: str, project: Path) -> None:
     command = [
         sys.executable,
@@ -211,6 +237,9 @@ def _validate_semantics(bom: dict, product: Product, *, artifact: bool) -> None:
     )
     if root is None or not root.get("dependsOn"):
         raise SbomError("generated CycloneDX BOM has no root dependency graph")
+    unversioned = sorted(item.get("name", "?") for item in bom["components"] if not item.get("version"))
+    if unversioned:
+        raise SbomError(f"generated CycloneDX BOM has components with no version: {', '.join(unversioned)}")
 
 
 def generate_sbom(
@@ -257,6 +286,10 @@ def generate_sbom(
             bom = json.loads(temporary.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError) as exc:
             raise SbomError("cyclonedx-py produced invalid JSON") from exc
+        try:
+            version_url_components(bom, read_pins(group.lock))
+        except LockError as exc:
+            raise SbomError(str(exc)) from exc
         _stamp(
             bom,
             config=config,
