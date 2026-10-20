@@ -59,6 +59,9 @@ class Canary:
     source: Path
     directory: Path
     created: str | None = None
+    #: The product's signed-file extension, with its dot: canaries are kept as
+    #: <key><extension>, which is where the product's key test looks for them.
+    extension: str = ".tpp"
 
 
 @dataclass(frozen=True)
@@ -376,7 +379,7 @@ class Provisioner:
 
     def sign_canary(self, name: str) -> None:
         canary = self.request.canary
-        target = canary.directory / f"{name}.tpp"
+        target = canary.directory / f"{name}{canary.extension}"
         if target.exists():
             return
         self.result.changes.append(f"sign canary {target.name}")

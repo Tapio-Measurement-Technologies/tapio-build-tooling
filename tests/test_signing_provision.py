@@ -363,6 +363,16 @@ class ProvisionTests(unittest.TestCase):
                          {"SIGNING_VAULT": "example-vault", "SIGNING_KEY_NAME": "gadget-2026a"})
         self.assertIn('"gadget-2026a": "', result.trusted_keys())
 
+    def test_canaries_carry_the_products_extension(self) -> None:
+        """Named as the product's key test looks for them: <key><extension>."""
+        cloud = FakeCloud()
+        canary = Canary(builder=("builder",), source=Path("canary"), directory=self.canaries,
+                        extension=".tcm")
+        self.run_against(cloud, request(canary=canary))
+
+        self.assertEqual(sorted(path.name for path in self.canaries.iterdir()),
+                         ["gadget-2026a.tcm", "gadget-2026b.tcm"])
+
     def test_a_second_run_only_borrows_and_returns_what_it_needs(self) -> None:
         """The vault role for the run, and the standby enabled to read it."""
         cloud = FakeCloud()

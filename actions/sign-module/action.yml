@@ -20,6 +20,9 @@ inputs:
   key-id:
     description: The name the product pins the key by; the key name by default
     default: ""
+  expect-id:
+    description: Fail unless the signed module verifies as this id, e.g. its source directory's name
+    default: ""
   created:
     description: ISO-8601 timestamp for the manifest, for a reproducible build
     default: ""
@@ -68,6 +71,7 @@ runs:
       env:
         BUILDER: ${{ inputs.builder }}
         CREATED: ${{ inputs.created }}
+        EXPECT_ID: ${{ inputs.expect-id }}
         KEY_ID: ${{ inputs.key-id }}
         KEY_NAME: ${{ inputs.key-name }}
         OUTPUT: ${{ inputs.output }}
@@ -80,5 +84,6 @@ runs:
               --vault "$VAULT" --key-name "$KEY_NAME" --record "$RECORD"
               --summary "$GITHUB_STEP_SUMMARY")
         if [[ -n "$KEY_ID" ]]; then args+=(--key-id "$KEY_ID"); fi
+        if [[ -n "$EXPECT_ID" ]]; then args+=(--expect-id "$EXPECT_ID"); fi
         if [[ -n "$CREATED" ]]; then args+=(--created "$CREATED"); fi
         tapio-build signing sign "${args[@]}"

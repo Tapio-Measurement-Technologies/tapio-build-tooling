@@ -5,23 +5,13 @@ import unittest
 
 
 ROOT = Path(__file__).parents[1]
+LIBRARY = ROOT / "packages/tapio-module-signing"
 
 
 class ActionTests(unittest.TestCase):
     def test_external_actions_use_full_commit_shas(self) -> None:
-        files = [
-            ROOT / ".github/workflows/ci.yml",
-            ROOT / ".github/workflows/supply-chain.yml",
-            ROOT / "actions/python-supply-chain/action.yml",
-            ROOT / "actions/python-release-checks/action.yml",
-            ROOT / "actions/python-release-evidence/action.yml",
-            ROOT / "actions/node-supply-chain/action.yml",
-            ROOT / "actions/publish-downloads/action.yml",
-            ROOT / "actions/publish-release-notes/action.yml",
-            ROOT / "actions/builder-image/action.yml",
-            ROOT / "actions/publish-archive/action.yml",
-            ROOT / "actions/sign-module/action.yml",
-        ]
+        files = sorted([*ROOT.glob(".github/workflows/*.yml"), *ROOT.glob("actions/*/action.yml")])
+        self.assertGreaterEqual(len(files), 13)
         uses = []
         for path in files:
             uses.extend(re.findall(r"uses:\s+([^\s]+)", path.read_text(encoding="utf-8")))
@@ -40,14 +30,36 @@ class ActionTests(unittest.TestCase):
                 self.assertIn("persist-credentials: false", workflow)
 
     def test_tooling_lock_includes_no_isolation_build_requirements(self) -> None:
-        pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-        build_requirements = set(pyproject["build-system"]["requires"])
+        """Both packages are built with --no-build-isolation from the tooling lock."""
         lock_inputs = {
             line
             for raw_line in (ROOT / "requirements.in").read_text(encoding="utf-8").splitlines()
             if (line := raw_line.strip()) and not line.startswith(("#", "--"))
         }
-        self.assertLessEqual(build_requirements, lock_inputs)
+        for path in [ROOT / "pyproject.toml", LIBRARY / "pyproject.toml"]:
+            with self.subTest(pyproject=str(path.relative_to(ROOT))):
+                pyproject = tomllib.loads(path.read_text(encoding="utf-8"))
+                self.assertLessEqual(set(pyproject["build-system"]["requires"]), lock_inputs)
+
+    def test_the_library_release_builds_from_main_and_writes_only_to_publish(self) -> None:
+        workflow = (ROOT / ".github/workflows/release-module-signing.yml").read_text(encoding="utf-8")
+        self.assertIn("\npermissions: {}\n", workflow)
+        build, publish = workflow.split("\n  publish:\n")
+        self.assertIn("contents: read", build)
+        self.assertNotIn("contents: write", build)
+        self.assertIn("contents: write", publish)
+        self.assertNotIn("id-token", workflow)
+        self.assertIn("persist-credentials: false", build)
+        self.assertLess(build.index("merge-base --is-ancestor"), build.index("pip wheel"))
+        self.assertIn('cmp "dist/first/$wheel" "dist/second/$wheel"', build)
+        self.assertIn("--verify-tag", publish)
+
+    def test_the_library_needs_nothing_but_cryptography(self) -> None:
+        """Products bundle it; whatever it pulls in, every product ships."""
+        pyproject = tomllib.loads((LIBRARY / "pyproject.toml").read_text(encoding="utf-8"))
+        self.assertEqual([re.split(r"[<>=!~ ]", dependency)[0]
+                          for dependency in pyproject["project"]["dependencies"]],
+                         ["cryptography"])
 
     def test_release_checks_validate_before_auditing(self) -> None:
         action = (ROOT / "actions/python-release-checks" / "action.yml").read_text(
@@ -95,6 +107,14 @@ class ActionTests(unittest.TestCase):
         self.assertLess(action.index("archive names"), action.index("docker build"))
         self.assertNotIn("configure-aws-credentials", action)
 
+    def test_keep_signed_module_keeps_only_through_the_tooling(self) -> None:
+        """No signing identity and no signing: the job that keeps cannot sign."""
+        action = (ROOT / "actions/keep-signed-module" / "action.yml").read_text(encoding="utf-8")
+        self.assertIn("tapio-build signing keep", action)
+        self.assertNotIn("azure/login", action)
+        self.assertNotIn("signing sign", action)
+        self.assertNotIn("gh release", action)
+
     def test_sign_module_signs_only_through_the_tooling(self) -> None:
         """Login, then one command that signs, verifies and records - nothing else."""
         action = (ROOT / "actions/sign-module" / "action.yml").read_text(encoding="utf-8")
@@ -103,7 +123,10 @@ class ActionTests(unittest.TestCase):
         self.assertIn("--summary \"$GITHUB_STEP_SUMMARY\"", action)
 
     def test_signing_code_carries_no_deployment_of_its_own(self) -> None:
-        for path in (ROOT / "src/tapio_build_tools/signing").glob("*.py"):
+        paths = [*(ROOT / "src/tapio_build_tools/signing").glob("*.py"),
+                 *(LIBRARY / "src/tapio_module_signing").glob("*.py")]
+        self.assertGreater(len(paths), 8)
+        for path in paths:
             text = path.read_text(encoding="utf-8")
             for literal in ["vault.azure.net", "tapiotechnologies", "Tapio-Measurement-Technologies"]:
                 with self.subTest(file=path.name, literal=literal):
@@ -114,7 +137,7 @@ class ActionTests(unittest.TestCase):
     def test_publish_downloads_carries_no_deployment_of_its_own(self) -> None:
         """The tooling is public; buckets, roles and addresses belong to the consumer."""
         for name in ["publish-downloads", "publish-release-notes", "publish-archive", "builder-image",
-                     "sign-module"]:
+                     "sign-module", "keep-signed-module"]:
             action = (ROOT / "actions" / name / "action.yml").read_text(encoding="utf-8")
             for literal in ["arn:aws:", "amazonaws.com", "s3://", "tapiotechnologies",
                             "vault.azure.net", "/subscriptions/"]:

@@ -178,6 +178,13 @@ class SignModuleTests(unittest.TestCase):
         with self.assertRaisesRegex(SigningError, "verify printed no JSON"):
             self.sign(FakeSigning(verify_output="looks fine to me"))
 
+    def test_a_module_that_verifies_as_another_id_is_not_signed(self) -> None:
+        """A workflow names the file after its source directory; it has to hold that."""
+        with self.assertRaisesRegex(SigningError, "holds the module 'com.example.export', not 'export'"):
+            self.sign(FakeSigning(), expect_id="export")
+        record = self.sign(FakeSigning(), expect_id="com.example.export")
+        self.assertEqual(record.id, "com.example.export")
+
     def test_the_pinned_name_may_differ_from_the_vault_name(self) -> None:
         record = self.sign(FakeSigning(), key_id="gadget-active")
         self.assertEqual((record.key_id, record.key_name), ("gadget-active", "gadget-2026a"))

@@ -163,6 +163,7 @@ def sign_module(
     vault: str,
     key_name: str,
     key_id: str | None = None,
+    expect_id: str | None = None,
     created: str | None = None,
     runner: Runner = _subprocess_runner,
     environ: Mapping[str, str] = os.environ,
@@ -175,6 +176,10 @@ def sign_module(
     verifier has accepted the file, so a key the product does not pin - or a
     builder that disagrees with its verifier - stops the run here rather than
     at a site.
+
+    *expect_id* is the id the module has to verify as: the name of the
+    directory it was signed from, say, so that the file a workflow names after
+    that directory holds what its name says.
     """
     builder = list(builder)
     key_id = key_id or key_name
@@ -192,6 +197,9 @@ def sign_module(
     if verified.get("key_id") != key_id:
         raise SigningError(
             f"{output} verified with key {verified.get('key_id')!r}, not {key_id!r}")
+    if expect_id is not None and verified.get("id") != expect_id:
+        raise SigningError(
+            f"{output} holds the module {verified.get('id')!r}, not {expect_id!r}")
 
     return SigningRecord(
         id=str(verified.get("id", "")),

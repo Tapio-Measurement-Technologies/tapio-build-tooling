@@ -35,6 +35,7 @@ from tapio_build_tools.ecosystems.python.requirements import (
 )
 from tapio_build_tools.ecosystems.python.sbom import SbomError, generate_sbom
 from tapio_build_tools.signing import SigningError
+from tapio_build_tools.signing.keep import keep_module
 from tapio_build_tools.signing.provision import Canary, Request, provision
 from tapio_build_tools.signing.sign import sign_module
 
@@ -163,9 +164,23 @@ def build_parser() -> argparse.ArgumentParser:
     sign.add_argument("--vault", required=True, help="Key Vault name")
     sign.add_argument("--key-name", required=True, help="the key's name in the vault")
     sign.add_argument("--key-id", help="the name the product pins the key by; the key name by default")
+    sign.add_argument("--expect-id", help="fail unless the signed module verifies as this id")
     sign.add_argument("--created", help="ISO-8601 timestamp for the manifest, for a reproducible build")
     sign.add_argument("--record", type=Path, help="write the record of what was signed here, as JSON")
     sign.add_argument("--summary", type=Path, help="append the record as Markdown here, e.g. $GITHUB_STEP_SUMMARY")
+
+    keep = signing_commands.add_parser(
+        "keep", help="keep signed files and their record as the module version's pre-release")
+    keep.add_argument("files", nargs="+", type=Path, help="the signed file(s) to keep")
+    keep.add_argument("--record", required=True, type=Path, help="the record `signing sign` wrote")
+    keep.add_argument("--tag-prefix", required=True,
+                      help="tags are <prefix>/<id>/v<version>, e.g. postprocessor")
+    keep.add_argument("--kind", required=True,
+                      help="what the product calls a module, for the release title")
+    keep.add_argument("--repository", default=os.environ.get("GITHUB_REPOSITORY", ""),
+                      help="owner/name; $GITHUB_REPOSITORY by default")
+    keep.add_argument("--target", default=os.environ.get("GITHUB_SHA", ""),
+                      help="the commit to tag; $GITHUB_SHA by default")
 
     provision_parser = signing_commands.add_parser(
         "provision", help="set up one product's keys and signing identity; changes nothing that is already right")
@@ -185,7 +200,10 @@ def build_parser() -> argparse.ArgumentParser:
     provision_parser.add_argument("--generation", help="year in the key names; the current year by default")
     provision_parser.add_argument("--canary-builder", help=f"sign a canary per key with this builder; {builder_help}")
     provision_parser.add_argument("--canary-source", type=Path, help="the canary module's source directory")
-    provision_parser.add_argument("--canary-dir", type=Path, help="where <key>.tpp canaries are written")
+    provision_parser.add_argument("--canary-dir", type=Path,
+                                  help="where <key><extension> canaries are written")
+    provision_parser.add_argument("--canary-extension", default=".tpp",
+                                  help="the product's signed-file extension, with its dot; .tpp by default")
     provision_parser.add_argument("--canary-created", help="ISO-8601 timestamp for the canary manifests")
     provision_parser.add_argument("--keep-admin", action="store_true",
                                   help="keep the signed-in user's Key Vault Crypto Officer role afterwards")
@@ -219,6 +237,7 @@ def _signing(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
             vault=args.vault,
             key_name=args.key_name,
             key_id=args.key_id,
+            expect_id=args.expect_id,
             created=args.created,
         )
         if args.record:
@@ -229,14 +248,25 @@ def _signing(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
                 summary.write(record.summary())
         print(record.to_json(), end="")
         return 0
+    if args.signing_command == "keep":
+        kept = keep_module(record_path=args.record, files=args.files, tag_prefix=args.tag_prefix,
+                           kind=args.kind, repository=args.repository, target=args.target)
+        if kept.created:
+            print(f"Kept as {kept.tag}.")
+        else:
+            print(f"{kept.tag} is already issued with this content; nothing to keep.")
+        return 0
     if args.signing_command == "provision":
         canary_options = (args.canary_builder, args.canary_source, args.canary_dir)
         if any(canary_options) and not all(canary_options):
             parser.error("--canary-builder, --canary-source and --canary-dir go together")
         canary = None
         if args.canary_builder:
+            if not args.canary_extension.startswith("."):
+                parser.error("--canary-extension starts with a dot, e.g. .tpp")
             canary = Canary(builder=tuple(shlex.split(args.canary_builder)), source=args.canary_source,
-                            directory=args.canary_dir, created=args.canary_created)
+                            directory=args.canary_dir, created=args.canary_created,
+                            extension=args.canary_extension)
         options = {}
         if args.generation:
             options["generation"] = args.generation
