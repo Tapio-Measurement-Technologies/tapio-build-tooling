@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import re
+import sys
 import unittest
 import zipfile
 from unittest.mock import patch
@@ -394,6 +395,51 @@ class AMalformedFileTest(SignedModuleFixture):
         with self.assertRaises(SignatureError):
             verify(path, profile=PROFILE)
         os.replace(path, path + ".moved")
+
+
+class AFileThatIsBrokenInsideTest(SignedModuleFixture):
+    """Damage the zip reports in its own ways is still only a damaged file."""
+
+    def test_a_member_whose_bytes_fail_their_crc_is_a_damaged_file(self):
+        built = self.build()
+        with open(built, "rb") as handle:
+            data = bytearray(handle.read())
+        with zipfile.ZipFile(built) as archive:
+            info = archive.getinfo("mill_export.py")
+        # The member's first stored byte, past its local header and name.
+        start = info.header_offset + 30 + len(info.filename.encode()) + len(info.extra)
+        data[start] ^= 0xFF
+        with open(built, "wb") as handle:
+            handle.write(bytes(data))
+
+        with self.assertRaises(FileError) as caught:
+            verify(built, profile=PROFILE)
+        self.assertIn("could not be read", str(caught.exception))
+
+    def test_signature_json_nested_past_the_parsers_depth_is_refused(self):
+        tampered = self.rewrite(self.build(), {SIGNATURE_NAME: b"[" * 200_000})
+
+        with self.assertRaises(SignatureError):
+            verify(tampered, profile=PROFILE)
+
+    def test_a_file_far_too_large_to_be_one_is_not_opened(self):
+        # The package's verify is the function; the module is the one patched.
+        verify_module = sys.modules["tapio_module_signing.verify"]
+
+        built = self.build()
+        with patch.object(verify_module, "MAX_FILE_BYTES", 100), \
+                patch("zipfile.ZipFile", side_effect=AssertionError("it was parsed")):
+            with self.assertRaises(FileError) as caught:
+                verify(built, profile=PROFILE)
+        self.assertIn("too large to be a gadget module", str(caught.exception))
+
+    def test_an_id_with_a_trailing_newline_is_refused(self):
+        """A pattern ending in $ matches before a final newline; the check does not."""
+        tampered = AMalformedFileTest.resigned(self, self.build(), id="com.example.test\n")
+
+        with self.assertRaises(FileError) as caught:
+            verify(tampered, profile=PROFILE)
+        self.assertIn("unusable id", str(caught.exception))
 
 
 class ReadingAVersionTest(unittest.TestCase):

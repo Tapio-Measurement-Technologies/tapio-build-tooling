@@ -104,6 +104,41 @@ class ReadingAUrlPinTest(LockFixture):
                 with self.assertRaisesRegex(LockError, "exactly one"):
                     self.pins(f"gadget-lib @ {URL}{hashes}\n")
 
+    def test_an_owner_or_repository_that_is_a_path_step_is_refused(self) -> None:
+        """The API would read /repos/../x as some other resource than the one named."""
+        for path in ["../gadget-tools", "example-org/..", "example-org/.", "-org/gadget-tools",
+                     "example--org/gadget-tools"]:
+            with self.subTest(path=path):
+                url = f"https://github.com/{path}/releases/download/v1/{WHEEL}"
+                with self.assertRaisesRegex(LockError, "not a GitHub release asset"):
+                    self.pins(f"gadget-lib @ {url} --hash=sha256:{DIGEST}\n")
+
+    def test_an_unreadable_port_is_a_lock_error_not_a_crash(self) -> None:
+        with self.assertRaisesRegex(LockError, "not a GitHub release asset"):
+            self.pins(f"gadget-lib @ https://github.com:abc/o/r/releases/download/v1/{WHEEL}"
+                      f" --hash=sha256:{DIGEST}\n")
+
+    def test_a_marker_may_hold_a_hyphen(self) -> None:
+        pins = self.pins(f"gadget-lib @ {URL} ; sys_platform == 'linux-x86' \\\n"
+                         f"    --hash=sha256:{DIGEST}\n")
+        self.assertEqual(pins["gadget-lib"].url, URL)
+
+    def test_anything_else_in_a_url_pins_entry_is_refused(self) -> None:
+        """Its hashes would otherwise be credited to the URL pin."""
+        with self.assertRaisesRegex(LockError, "more than"):
+            self.pins(f"gadget-lib @ {URL} \\\n    packaging==26.2 \\\n"
+                      f"    --hash=sha256:{DIGEST}\n")
+        with self.assertRaisesRegex(LockError, "more than"):
+            without_url_pins(f"gadget-lib @ {URL} \\\n    packaging==26.2\n")
+
+    def test_a_blank_or_comment_line_ends_an_entry_as_it_does_for_pip(self) -> None:
+        pins = self.pins(f"packaging==26.2 \\\n\n    --hash=sha256:{'b' * 64}\n")
+        self.assertEqual(pins["packaging"].hashes, frozenset())
+
+    def test_a_url_pin_on_the_last_line_is_taken_out_too(self) -> None:
+        self.assertEqual(without_url_pins(f"packaging==26.2\ngadget-lib @ {URL} "
+                                          f"--hash=sha256:{DIGEST}"), "packaging==26.2\n")
+
     def test_the_same_asset_parsed_twice_reads_the_same(self) -> None:
         self.assertEqual(release_asset(URL), release_asset(URL))
         self.assertIsNone(release_asset("https://github.com/o/r"))
@@ -196,6 +231,23 @@ class DatingAUrlPinTest(LockFixture):
         self.lock.write_text(f"gadget-lib @ https://example.com/{WHEEL}\n", encoding="utf-8")
         with self.assertRaises(CooldownError):
             python_cooldown.read_pins(self.lock)
+
+
+class TheTokenStaysWithItsHostTest(unittest.TestCase):
+    def test_a_redirect_to_another_host_is_refused_and_one_within_it_followed(self) -> None:
+        from urllib.error import HTTPError
+        from urllib.request import Request
+        from tapio_build_tools.cooldown import _SameHostRedirects
+
+        handler = _SameHostRedirects()
+        request = Request("https://api.github.com/repos/o/r/releases/tags/v1",
+                          headers={"Authorization": "Bearer secret"})
+        with self.assertRaises(HTTPError):
+            handler.redirect_request(request, None, 302, "Found", {},
+                                     "https://elsewhere.example/collect")
+        followed = handler.redirect_request(request, None, 301, "Moved", {},
+                                            "https://api.github.com/repositories/1/releases/1")
+        self.assertEqual(followed.full_url, "https://api.github.com/repositories/1/releases/1")
 
 
 class AuditingAUrlPinTest(LockFixture):

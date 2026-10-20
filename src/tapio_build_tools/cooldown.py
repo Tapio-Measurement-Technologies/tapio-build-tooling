@@ -14,7 +14,8 @@ from datetime import datetime, timedelta, timezone
 import json
 from typing import Callable, Iterable, Mapping, TypeVar
 from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+from urllib.parse import urlsplit
+from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
 
 class CooldownError(RuntimeError):
@@ -41,15 +42,30 @@ def published(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
 
 
+class _SameHostRedirects(HTTPRedirectHandler):
+    """Follows a redirect only to the host the request was made to.
+
+    urllib carries a request's headers across a redirect, so a token sent to
+    one host would otherwise be handed to whichever host it redirected to.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if urlsplit(newurl).hostname != urlsplit(req.full_url).hostname:
+            raise HTTPError(req.full_url, code, f"refused a redirect to {newurl}", headers, fp)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def fetch_json(url: str, *, missing: str, headers: Mapping[str, str] | None = None) -> dict:
     """The JSON document at *url*; *missing* is the error raised for a 404.
 
     *headers* are added to the request: a token, for an API that takes one.
+    A request carrying any is not followed to another host.
     """
     request = Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/json",
                                     **(headers or {})})
+    opener = build_opener(_SameHostRedirects).open if headers else urlopen
     try:
-        with urlopen(request, timeout=TIMEOUT_SECONDS) as response:
+        with opener(request, timeout=TIMEOUT_SECONDS) as response:
             return json.loads(response.read().decode("utf-8"))
     except HTTPError as exc:
         if exc.code == 404:

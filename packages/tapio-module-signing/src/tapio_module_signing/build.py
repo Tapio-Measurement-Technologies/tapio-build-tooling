@@ -42,20 +42,32 @@ import zipfile
 from tapio_module_signing.profile import Profile
 from tapio_module_signing.verify import (
     MANIFEST_NAME,
+    MODULE_NAME_PATTERN,
     SIGNATURE_ALGORITHM,
     SIGNATURE_NAME,
     SUPPORTED_SCHEMA,
+    UNSIGNED_MEMBERS,
     parse_app_version,
     verify,
 )
 
 
 def source_files(source: str, *, profile: Profile) -> list[str]:
-    """Every file the module carries, as posix relative paths, sorted."""
+    """Every file the module carries, as posix relative paths, sorted.
+
+    A symbolic link is refused rather than followed: whatever it points at -
+    anything the signing runner can read - would be signed and shipped as part
+    of the module.
+    """
     excluded = profile.excluded | {profile.source_config}
     found = []
     for root, dirs, names in os.walk(source):
         dirs[:] = sorted(d for d in dirs if d not in excluded)
+        for name in [*dirs, *sorted(names)]:
+            absolute = os.path.join(root, name)
+            if os.path.islink(absolute):
+                raise SystemExit(f"{absolute} is a symbolic link; a signed {profile.kind} "
+                                 f"carries only files of its own")
         for name in sorted(names):
             if name in excluded or name.endswith(profile.excluded_suffixes):
                 continue
@@ -81,7 +93,7 @@ def build_manifest(source: str, created: str | None = None, *, profile: Profile)
     # Each refused here rather than left to the verifier, which would refuse
     # the module at every site it was delivered to - after it had been signed.
     module_id = config.get("id")
-    if not isinstance(module_id, str) or not profile.id_pattern.match(module_id):
+    if not isinstance(module_id, str) or not profile.id_pattern.fullmatch(module_id):
         raise SystemExit(f"{profile.source_config} gives an unusable id {module_id!r}")
 
     module = config.get("module")
@@ -89,6 +101,14 @@ def build_manifest(source: str, created: str | None = None, *, profile: Profile)
         raise SystemExit(f"{profile.source_config} names no module")
     if module not in files:
         raise SystemExit(f"{profile.source_config} names {module}, which is not in {source}")
+    if not MODULE_NAME_PATTERN.fullmatch(module):
+        raise SystemExit(f"{profile.source_config} names {module}, which cannot be imported; "
+                         f"the module is a .py file at the top of {source}, named as a "
+                         f"Python identifier")
+    reserved = sorted(UNSIGNED_MEMBERS.intersection(files))
+    if reserved:
+        raise SystemExit(f"{source} holds {', '.join(reserved)}, which the signed file "
+                         f"writes itself")
 
     min_app_version = config.get("min_app_version", "")
     if min_app_version != "" and parse_app_version(min_app_version) is None:

@@ -65,6 +65,32 @@ class TheBuilderTest(SignedModuleFixture):
         self.assertIn("unusable id", str(caught.exception))
         self.assertIn("gadget.toml", str(caught.exception))
 
+    def test_a_symbolic_link_is_refused_rather_than_followed(self):
+        """Whatever it points at would be signed and shipped."""
+        secret = os.path.join(self.tmp, "runner-secrets.env")
+        with open(secret, "w", encoding="utf-8") as handle:
+            handle.write("TOKEN=x\n")
+        os.symlink(secret, os.path.join(self.source, "data.env"))
+
+        with self.assertRaises(SystemExit) as caught:
+            self.manifest()
+        self.assertIn("symbolic link", str(caught.exception))
+
+    def test_a_module_that_could_not_be_imported_is_refused_before_signing(self):
+        self.write("mill-export.py", "VALUE = 1\n")
+        self.write("gadget.toml", 'id = "a"\nmodule = "mill-export.py"\n')
+
+        with self.assertRaises(SystemExit) as caught:
+            self.manifest()
+        self.assertIn("cannot be imported", str(caught.exception))
+
+    def test_a_source_holding_a_file_the_format_writes_itself_is_refused(self):
+        self.write("manifest.json", "{}\n")
+
+        with self.assertRaises(SystemExit) as caught:
+            self.manifest()
+        self.assertIn("manifest.json", str(caught.exception))
+
     def test_a_module_that_is_not_there_is_refused(self):
         self.write("gadget.toml", 'id = "a"\nmodule = "missing.py"\n')
 

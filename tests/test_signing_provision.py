@@ -373,6 +373,13 @@ class ProvisionTests(unittest.TestCase):
         self.assertEqual(sorted(path.name for path in self.canaries.iterdir()),
                          ["gadget-2026a.tcm", "gadget-2026b.tcm"])
 
+    def test_a_canary_extension_that_is_more_than_an_ending_is_refused(self) -> None:
+        for extension in ["tcm", ".tcm/../../x", ".TCM", ".", ".tcm\n"]:
+            with self.subTest(extension=extension):
+                with self.assertRaises(SigningError):
+                    Canary(builder=("builder",), source=Path("canary"), directory=self.canaries,
+                           extension=extension)
+
     def test_a_second_run_only_borrows_and_returns_what_it_needs(self) -> None:
         """The vault role for the run, and the standby enabled to read it."""
         cloud = FakeCloud()

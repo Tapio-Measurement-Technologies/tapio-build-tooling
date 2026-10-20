@@ -110,6 +110,13 @@ jobs:
         run: |
           set -euo pipefail
           echo "$SHA256  dist/$WHEEL" | sha256sum --check
+          # The tag still names the commit that was checked and built: one
+          # moved since would publish this wheel under a commit nobody built.
+          tagged=$(gh api "repos/$REPO/commits/$TAG" --jq .sha)
+          if [[ "$tagged" != "$GITHUB_SHA" ]]; then
+            echo "::error::$TAG now names $tagged, not the $GITHUB_SHA that was built"
+            exit 1
+          fi
           {
             echo "tapio-module-signing ${TAG#module-signing-v}."
             echo

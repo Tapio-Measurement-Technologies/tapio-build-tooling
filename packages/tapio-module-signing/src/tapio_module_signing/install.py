@@ -21,11 +21,16 @@ import os
 import tempfile
 
 from tapio_module_signing.profile import Profile
-from tapio_module_signing.verify import FileError, VersionError, is_signed_file, verify
+from tapio_module_signing.verify import (
+    MAX_FILE_BYTES,
+    FileError,
+    VersionError,
+    is_signed_file,
+    verify,
+)
 
-#: A module is a file and a few helpers, a few hundred kilobytes at most.
-#: Anything this size was picked by mistake, and is not read into memory.
-MAX_FILE_BYTES = 64 * 1024 * 1024
+__all__ = ["MAX_FILE_BYTES", "InstalledCopy", "PendingInstall", "identify",
+           "installed_copies", "prepare_install"]
 
 #: The staged copy is named so the product passes it by: it reads only signed
 #: files - and, where it allows them, loose .py ones - and this is neither.
@@ -55,6 +60,12 @@ class PendingInstall:
     replaces: list[InstalledCopy] = field(default_factory=list)
     #: What the verified manifest said, for a product that shows more of it.
     manifest: dict = field(default_factory=dict)
+    #: The profile it was checked against, to check it again by on commit.
+    profile: Profile | None = field(default=None, repr=False)
+    #: Copies commit() could not remove - open in another program, say. The
+    #: new module is in place regardless; these are left for the product to
+    #: name, since a second copy of a module is refused when it loads.
+    not_removed: list[str] = field(default_factory=list)
 
     @property
     def is_update(self) -> bool:
@@ -71,13 +82,22 @@ class PendingInstall:
         versions = sorted({copy.version for copy in self.replaces if copy.version})
         return ", ".join(versions)
 
-    def commit(self) -> None:
+    def commit(self) -> list[str]:
         """Move the staged copy into place and remove what it replaces.
 
+        The staged copy is checked once more first, against what the operator
+        was shown: it sat in a folder others can write to while they decided.
         os.replace is atomic within one folder, so the product never sees half
         a file under the final name, and a copy already at that name - the
         same module, installed before - is overwritten in the same step.
+
+        Returns the copies it could not remove, also kept in not_removed.
         """
+        if self.profile is not None:
+            verified = verify(self.staged_path, profile=self.profile)
+            verified.close()
+            if verified.manifest != self.manifest:
+                raise FileError("changed while it waited to be installed")
         os.replace(self.staged_path, self.target_path)
         for copy in self.replaces:
             if os.path.normcase(os.path.abspath(copy.path)) != \
@@ -86,6 +106,9 @@ class PendingInstall:
                     os.remove(copy.path)
                 except FileNotFoundError:
                     pass
+                except OSError:
+                    self.not_removed.append(copy.path)
+        return list(self.not_removed)
 
     def discard(self) -> None:
         try:
@@ -158,6 +181,7 @@ def prepare_install(source_path: str, folder: str, *, profile: Profile,
             replaces=installed_copies(folder, verified.id, profile=profile,
                                       skip=staged_path),
             manifest=verified.manifest,
+            profile=profile,
         )
     except BaseException:
         try:

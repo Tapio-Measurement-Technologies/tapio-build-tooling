@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 import hashlib
 import hmac
 import json
+import os
 import posixpath
 import re
 import zipfile
@@ -46,7 +47,8 @@ SIGNATURE_ALGORITHM = "ECDSA-P256-SHA256"
 RAW_SIGNATURE_LENGTH = 64
 
 #: The module becomes a Python module name, so the stem has to be an identifier.
-_MODULE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\.py$")
+#: It sits at the top of the archive, beside the manifest.
+MODULE_NAME_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\.py")
 
 #: A product version as a release is tagged ("v1.7.0", "v1.7.0-beta.2") or as a
 #: module names one ("1.7.0", "1.7"). Anything after the numbers is a
@@ -57,6 +59,9 @@ _APP_VERSION = re.compile(r"^v?(\d+)\.(\d+)(?:\.(\d+))?(?:[-+][0-9A-Za-z.\-+]*)?
 #: A manifest is a few kilobytes; anything of this size is not one.
 MAX_METADATA_BYTES = 256 * 1024
 MAX_MEMBERS = 256
+#: A module is a file and a few helpers, a few hundred kilobytes at most.
+#: Anything this size is not one, and its directory is not even parsed.
+MAX_FILE_BYTES = 64 * 1024 * 1024
 
 
 class SignatureError(Exception):
@@ -190,7 +195,7 @@ def _verify_signature(manifest_bytes: bytes, signature_bytes: bytes, profile: Pr
     """
     try:
         signature = json.loads(signature_bytes)
-    except (ValueError, UnicodeDecodeError) as error:
+    except (ValueError, UnicodeDecodeError, RecursionError) as error:
         raise SignatureError(f"{SIGNATURE_NAME} is not readable: {error}") from error
     if not isinstance(signature, dict):
         raise SignatureError(f"{SIGNATURE_NAME} is not an object")
@@ -225,7 +230,7 @@ def _verify_signature(manifest_bytes: bytes, signature_bytes: bytes, profile: Pr
 def _parse_manifest(manifest_bytes: bytes, profile: Profile) -> dict:
     try:
         manifest = json.loads(manifest_bytes)
-    except (ValueError, UnicodeDecodeError) as error:
+    except (ValueError, UnicodeDecodeError, RecursionError) as error:
         raise FileError(f"{MANIFEST_NAME} is not readable: {error}") from error
     if not isinstance(manifest, dict):
         raise FileError(f"{MANIFEST_NAME} is not an object")
@@ -237,7 +242,7 @@ def _parse_manifest(manifest_bytes: bytes, profile: Profile) -> dict:
             f"reads format {SUPPORTED_SCHEMA}")
 
     module_id = manifest.get("id")
-    if not isinstance(module_id, str) or not profile.id_pattern.match(module_id):
+    if not isinstance(module_id, str) or not profile.id_pattern.fullmatch(module_id):
         raise FileError(f"has an unusable id {module_id!r}")
 
     files = manifest.get("files")
@@ -247,7 +252,7 @@ def _parse_manifest(manifest_bytes: bytes, profile: Profile) -> dict:
     module = manifest.get("module")
     if not isinstance(module, str) or module not in files:
         raise FileError(f"names a module {module!r} that {MANIFEST_NAME} does not cover")
-    if not _MODULE_NAME.match(module):
+    if not MODULE_NAME_PATTERN.fullmatch(module):
         raise FileError(f"names a module {module!r} that cannot be imported")
 
     required = manifest.get("min_app_version", "")
@@ -341,8 +346,14 @@ def verify(path: str, *, profile: Profile) -> Verified:
     executed or written to disk here.
     """
     try:
+        size = os.path.getsize(path)
+    except OSError as error:
+        raise FileError(f"could not be opened: {error}") from error
+    if size > MAX_FILE_BYTES:
+        raise FileError(f"is {size} bytes, too large to be a {profile.kind}")
+    try:
         archive = zipfile.ZipFile(path)
-    except (zipfile.BadZipFile, OSError) as error:
+    except Exception as error:  # BadZipFile, OSError, and whatever a hostile header raises
         raise FileError(f"could not be opened: {error}") from error
 
     try:
@@ -369,6 +380,13 @@ def verify(path: str, *, profile: Profile) -> Verified:
             manifest=manifest,
             _archive=archive,
         )
-    except Exception:
+    except (SignatureError, FileError, VersionError):
         archive.close()
         raise
+    except Exception as error:
+        # A member whose bytes fail their CRC, an encrypted or unsupported one,
+        # a truncated stream: the file is damaged, and saying so is the
+        # contract. Anything else escaping here would take down whatever was
+        # loading the folder.
+        archive.close()
+        raise FileError(f"could not be read: {type(error).__name__}: {error}") from error

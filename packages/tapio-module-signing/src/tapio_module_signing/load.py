@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import atexit
 from collections.abc import Mapping
+import hashlib
+import hmac
 import importlib.util
 import os
 import re
@@ -25,7 +27,7 @@ import tempfile
 import types
 
 from tapio_module_signing.profile import Profile
-from tapio_module_signing.verify import Verified, verify
+from tapio_module_signing.verify import FileError, Verified, verify
 
 _UNSAFE = re.compile(r"[^a-z0-9_]+")
 
@@ -37,8 +39,16 @@ GENERATIONS_KEPT = 2
 
 
 def package_name(module_id: str) -> str:
-    """A module id as a Python identifier, without losing which it was."""
-    return _UNSAFE.sub("_", module_id.lower()).strip("_") or "module"
+    """A module id as a Python identifier, without losing which it was.
+
+    An id that is one already is used as it is. Any other gets the start of
+    its own hash after it, so that two ids that read the same once dots and
+    hyphens are gone - "a.b" and "a-b" - still get packages of their own.
+    """
+    name = _UNSAFE.sub("_", module_id.lower()).strip("_") or "module"
+    if name != module_id:
+        name = f"{name}_{hashlib.sha256(module_id.encode('utf-8')).hexdigest()[:8]}"
+    return name
 
 
 class Loader:
@@ -83,16 +93,29 @@ class Loader:
 
     def _unpack(self, verified: Verified, root: str) -> str:
         unpacked_dir = os.path.join(root, package_name(verified.id))
-        os.makedirs(unpacked_dir, exist_ok=True)
+        # Emptied first: a module loaded again into the same generation must
+        # not find files - or cached bytecode - its new manifest does not
+        # cover, left by the version before.
+        shutil.rmtree(unpacked_dir, ignore_errors=True)
+        os.makedirs(unpacked_dir)
         archive = verified.open()
-        for name in sorted(verified.manifest["files"]):
+        for name, expected in sorted(verified.manifest["files"].items()):
             # The names were checked against escaping when the file was
             # verified; joining them here is safe because of that, not in
             # spite of it.
             target = os.path.join(unpacked_dir, *name.split("/"))
             os.makedirs(os.path.dirname(target), exist_ok=True)
+            # Hashed again as written. The archive has been held open since it
+            # was checked, but a zip member's own check is a CRC, which is no
+            # check against bytes changed on purpose in the meantime.
+            digest = hashlib.sha256()
             with archive.open(name) as member, open(target, "wb") as out:
-                shutil.copyfileobj(member, out)
+                for block in iter(lambda: member.read(64 * 1024), b""):
+                    digest.update(block)
+                    out.write(block)
+            if not hmac.compare_digest(digest.hexdigest(), expected[len("sha256:"):].lower()):
+                shutil.rmtree(unpacked_dir, ignore_errors=True)
+                raise FileError(f"has a modified {name}")
         return unpacked_dir
 
     def _install_package(self, verified: Verified, unpacked_dir: str) -> str:

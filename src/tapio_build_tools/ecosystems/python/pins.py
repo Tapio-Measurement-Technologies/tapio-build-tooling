@@ -9,6 +9,10 @@ as ``name @ https://github.com/<owner>/<repo>/releases/download/<tag>/<wheel>``,
 without a hash; the compiled lock carries the hash. Any other URL is refused:
 a lock that may name any address is a lock that may fetch from anywhere, and
 nothing could date or check what it fetched.
+
+Which owner a pin names is not checked here. The hash fixes the file; which
+repository it comes from is a line in requirements.in, and is reviewed there
+like any other dependency.
 """
 
 from __future__ import annotations
@@ -31,10 +35,15 @@ _URL_PIN = re.compile(r"^(?P<name>[A-Za-z0-9._-]+)\s*@\s*(?P<url>[^\s;\\]+)")
 _HASH = re.compile(r"--hash=sha256:([0-9a-f]{64})")
 # pip reads a `#` as a comment at the start of a line or after whitespace.
 _COMMENT = re.compile(r"(?:^|\s)#.*$")
+# GitHub's own rules: an owner is letters, digits and single hyphens; a
+# repository name may also hold dots and underscores, but is never . or ..,
+# which the API would read as a path step to some other resource.
 _RELEASE_ASSET = re.compile(
-    r"^/(?P<owner>[A-Za-z0-9_.-]+)/(?P<repository>[A-Za-z0-9_.-]+)"
-    r"/releases/download/(?P<tag>[^/]+)/(?P<name>[^/]+)$"
+    r"/(?P<owner>[A-Za-z0-9](?:-?[A-Za-z0-9])*)/(?P<repository>(?!\.\.?/)[A-Za-z0-9_.-]+)"
+    r"/releases/download/(?P<tag>[^/]+)/(?P<name>[^/]+)"
 )
+# What may follow the URL in a URL pin's entry: a marker, and its hashes.
+_URL_PIN_REST = re.compile(r"(?:\s*;(?:(?!--hash=).)*?)?(?:\s+--hash=sha256:[0-9a-f]{64})*\s*")
 
 
 class LockError(ValueError):
@@ -82,11 +91,14 @@ class Pin:
 
 def release_asset(url: str) -> ReleaseAsset | None:
     """The GitHub release asset *url* names, or None if it names none."""
-    parts = urlsplit(url)
-    if parts.scheme != "https" or parts.hostname != "github.com" or parts.port \
-            or parts.username or parts.password or parts.query or parts.fragment:
+    try:
+        parts = urlsplit(url)
+        if parts.scheme != "https" or parts.hostname != "github.com" or parts.port \
+                or parts.username or parts.password or parts.query or parts.fragment:
+            return None
+    except ValueError:  # an unreadable port, an unbalanced bracket
         return None
-    match = _RELEASE_ASSET.match(parts.path)
+    match = _RELEASE_ASSET.fullmatch(parts.path)
     if match is None:
         return None
     return ReleaseAsset(
@@ -96,11 +108,18 @@ def release_asset(url: str) -> ReleaseAsset | None:
 
 
 def entries(text: str) -> Iterator[str]:
-    """The lock's logical lines: comments dropped, continuations joined."""
+    """The lock's logical lines: comments dropped, continuations joined.
+
+    A blank or comment-only line ends a continuation, as it does for pip, so
+    what is read here as one requirement is what pip installs as one.
+    """
     entry = ""
     for line in text.splitlines():
         stripped = _COMMENT.sub("", line).strip()
         if not stripped:
+            if entry.strip():
+                yield entry.strip()
+            entry = ""
             continue
         if stripped.endswith("\\"):
             entry += stripped[:-1] + " "
@@ -151,6 +170,8 @@ def read_pins(lock: Path) -> list[Pin]:
         match = _URL_PIN.match(entry)
         if match is None:
             raise LockError(f"{lock.name} holds a requirement that is not pinned: {entry}")
+        if not _URL_PIN_REST.fullmatch(entry[match.end():]):
+            raise LockError(f"{lock.name} holds more than one URL pin in one entry: {entry}")
         pin = _url_pin(lock, match["name"], match["url"], set(found))
         hashes.setdefault((pin.name, pin.version, pin.url), set()).update(pin.hashes)
     pins = [Pin(name, version, frozenset(allowed), url)
@@ -161,17 +182,41 @@ def read_pins(lock: Path) -> list[Pin]:
     return pins
 
 
+def _is_url_pin(entry: str) -> bool:
+    """Whether *entry* is a URL pin, and nothing but; LockError if it starts as one only."""
+    match = _URL_PIN.match(entry)
+    if match is None:
+        return False
+    if not _URL_PIN_REST.fullmatch(entry[match.end():]):
+        raise LockError(f"a lock holds more than a URL pin in one entry: {entry}")
+    return True
+
+
 def without_url_pins(text: str) -> str:
-    """*text*, a lock, with each URL pin's lines taken out and the rest as it was."""
+    """*text*, a lock, with each URL pin's lines taken out and the rest as it was.
+
+    Lines are grouped the way :func:`entries` joins them, so what is taken out
+    is exactly the entries read as URL pins.
+    """
     kept: list[str] = []
     group: list[str] = []
-    for line in text.splitlines(keepends=True):
-        group.append(line)
-        if _COMMENT.sub("", line).rstrip().endswith("\\"):
-            continue
+
+    def close() -> None:
         joined = " ".join(_COMMENT.sub("", part).strip().removesuffix("\\") for part in group)
-        if not _URL_PIN.match(joined.strip()):
+        if not _is_url_pin(joined.strip()):
             kept.extend(group)
-        group = []
-    kept.extend(group)
+        group.clear()
+
+    for line in text.splitlines(keepends=True):
+        content = _COMMENT.sub("", line).strip()
+        if not content:
+            if group:
+                close()
+            kept.append(line)
+            continue
+        group.append(line)
+        if not content.endswith("\\"):
+            close()
+    if group:
+        close()
     return "".join(kept)

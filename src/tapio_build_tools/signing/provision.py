@@ -63,6 +63,12 @@ class Canary:
     #: <key><extension>, which is where the product's key test looks for them.
     extension: str = ".tpp"
 
+    def __post_init__(self) -> None:
+        # A file name's ending, nothing that could step out of the directory.
+        if not re.fullmatch(r"\.[a-z0-9]+", self.extension):
+            raise SigningError(f"canary extension {self.extension!r} is not a dot and "
+                               f"lowercase letters or digits, e.g. .tpp")
+
 
 @dataclass(frozen=True)
 class Request:

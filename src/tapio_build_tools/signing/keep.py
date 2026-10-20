@@ -27,13 +27,15 @@ import subprocess
 import tempfile
 
 from tapio_build_tools.downloads.package import Runner, _subprocess_runner
+from tapio_build_tools.evidence import sha256_file
 from tapio_build_tools.signing import SigningError
 
 #: What goes into a tag. Kept to what a git ref and a release URL take as is.
-_TAG_PREFIX = re.compile(r"^[a-z0-9]+(?:[-/][a-z0-9]+)*$")
-_ID = re.compile(r"^[A-Za-z0-9]+(?:[._-][A-Za-z0-9]+)*$")
-_VERSION = re.compile(r"^[0-9A-Za-z]+(?:[.+-][0-9A-Za-z]+)*$")
-_REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+#: Matched whole, so a trailing newline is not taken for the end.
+_TAG_PREFIX = re.compile(r"[a-z0-9]+(?:[-/][a-z0-9]+)*")
+_ID = re.compile(r"[A-Za-z0-9]+(?:[._-][A-Za-z0-9]+)*")
+_VERSION = re.compile(r"[0-9A-Za-z]+(?:[.+-][0-9A-Za-z]+)*")
+_REPOSITORY = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 
 
 @dataclass(frozen=True)
@@ -53,18 +55,22 @@ def _run(runner: Runner, args: list[str], what: str) -> subprocess.CompletedProc
         raise SigningError(f"{what} failed: {detail or exc}") from exc
 
 
-def _release_exists(runner: Runner, tag: str, repository: str) -> bool:
-    args = ["gh", "release", "view", tag, "--repo", repository, "--json", "tagName"]
+def _release_assets(runner: Runner, tag: str, repository: str) -> set[str] | None:
+    """The names of the assets the release *tag* holds, or None if there is none."""
+    args = ["gh", "release", "view", tag, "--repo", repository, "--json", "assets"]
     try:
-        runner(args)
+        printed = runner(args).stdout
     except FileNotFoundError as exc:
         raise SigningError("gh is not installed") from exc
     except subprocess.CalledProcessError as exc:
         detail = (exc.stderr or "").strip() if isinstance(exc.stderr, str) else ""
         if "not found" in detail.lower():
-            return False
+            return None
         raise SigningError(f"looking up release {tag} failed: {detail or exc}") from exc
-    return True
+    try:
+        return {str(asset.get("name")) for asset in json.loads(printed or "{}").get("assets") or []}
+    except (ValueError, AttributeError) as exc:
+        raise SigningError(f"gh described release {tag} as {printed!r}") from exc
 
 
 def _record(path: Path) -> dict:
@@ -79,12 +85,12 @@ def _record(path: Path) -> dict:
 
 def tag_for(record: dict, tag_prefix: str) -> str:
     """The tag a module's signature is kept under, or why it cannot have one."""
-    if not _TAG_PREFIX.match(tag_prefix):
+    if not _TAG_PREFIX.fullmatch(tag_prefix):
         raise SigningError(f"tag prefix {tag_prefix!r} is not lowercase words joined by - or /")
     module_id, version = str(record.get("id", "")), str(record.get("version", ""))
-    if not _ID.match(module_id) or ".." in module_id:
+    if not _ID.fullmatch(module_id) or ".." in module_id:
         raise SigningError(f"the record's id {module_id!r} cannot be part of a tag")
-    if not _VERSION.match(version):
+    if not _VERSION.fullmatch(version):
         raise SigningError(f"the record's version {version!r} cannot be part of a tag")
     return f"{tag_prefix}/{module_id}/v{version}"
 
@@ -111,7 +117,7 @@ def keep_module(
     for path in [*files, record_path]:
         if not path.is_file():
             raise SigningError(f"{path} does not exist")
-    if not _REPOSITORY.match(repository):
+    if not _REPOSITORY.fullmatch(repository):
         raise SigningError(f"{repository!r} is not owner/name")
     if not target:
         raise SigningError("no commit to tag")
@@ -121,8 +127,16 @@ def keep_module(
     manifest = record.get("manifest_sha256")
     if not isinstance(manifest, str) or not manifest:
         raise SigningError(f"{record_path} names no manifest_sha256")
+    # The file kept is the file the record describes: the one signed, as it
+    # came out of signing, and nothing beside it.
+    if [path.name for path in files] != [record.get("file")]:
+        raise SigningError(
+            f"the record describes {record.get('file')!r}; given {[path.name for path in files]}")
+    if sha256_file(files[0]) != record.get("file_sha256"):
+        raise SigningError(f"{files[0]} is not the file the record describes: its SHA-256 differs")
 
-    if _release_exists(runner, tag, repository):
+    assets = _release_assets(runner, tag, repository)
+    if assets is not None and record_path.name in assets:
         with tempfile.TemporaryDirectory(prefix="tapio-keep-") as work:
             _run(runner, ["gh", "release", "download", tag, "--repo", repository,
                           "--pattern", record_path.name, "--dir", work],
@@ -132,7 +146,14 @@ def keep_module(
             raise SigningError(
                 f"{tag} was already issued with different content. "
                 f"Raise the version in the module's source to sign this one.")
-        return Kept(tag=tag, created=False)
+    if assets is not None:
+        # A run that stopped part-way through uploading leaves a release
+        # missing some of what it should hold; this one puts them there.
+        missing = [path for path in [*files, record_path] if path.name not in assets]
+        if missing:
+            _run(runner, ["gh", "release", "upload", tag, *[str(path) for path in missing],
+                          "--repo", repository], f"completing release {tag}")
+        return Kept(tag=tag, created=bool(missing))
 
     title_kind = kind[:1].upper() + kind[1:]
     notes = (f"Signed {kind} {record['id']} {record['version']}.\n\n"

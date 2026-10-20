@@ -1,10 +1,13 @@
 """What the loader does with a module once it has verified."""
 
 import os
+import shutil
 import sys
 
 from support import PROFILE, SignedModuleFixture
-from tapio_module_signing import Loader, SignatureError, verify
+import unittest
+
+from tapio_module_signing import FileError, Loader, SignatureError, verify
 from tapio_module_signing.testing import generate_key, write_key_file
 
 
@@ -23,7 +26,9 @@ class LoaderFixture(SignedModuleFixture):
 
     def module_source(self, module_id, files, module="mill_export.py"):
         source = os.path.join(self.tmp, "src-" + module_id)
-        os.makedirs(source, exist_ok=True)
+        # Fresh each time: a version is exactly the files it is given.
+        shutil.rmtree(source, ignore_errors=True)
+        os.makedirs(source)
         for name, text in files.items():
             path = os.path.join(source, name)
             os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -43,7 +48,8 @@ class LoadingAModuleTest(LoaderFixture):
         _verified, module = self.loader.load_file(
             self.signed("com.example.one", {"mill_export.py": "VALUE = 1\n"}))
 
-        self.assertEqual(module.__name__, "gadget_modules.com_example_one.mill_export")
+        self.assertTrue(module.__name__.startswith("gadget_modules.com_example_one_"))
+        self.assertTrue(module.__name__.endswith(".mill_export"))
         self.assertIs(sys.modules[module.__name__], module)
         self.assertEqual(module.VALUE, 1)
 
@@ -120,6 +126,39 @@ class LoadingAModuleTest(LoaderFixture):
         self.loader.load(verified)
 
         os.replace(verified.path, verified.path + ".moved")
+
+
+class PackageNamesTest(unittest.TestCase):
+    def test_ids_that_read_the_same_without_punctuation_stay_apart(self):
+        from tapio_module_signing.load import package_name
+
+        names = {package_name(module_id) for module_id in ("a.b", "a-b", "a_b", "a.b-c", "a-b.c")}
+        self.assertEqual(len(names), 5)
+        self.assertEqual(package_name("site_dirt"), "site_dirt")
+        for name in names:
+            self.assertTrue(name.isidentifier(), name)
+
+
+class LoadingTwiceTest(LoaderFixture):
+    def test_a_second_load_into_the_same_generation_leaves_nothing_of_the_first(self):
+        """A helper the new version no longer carries must not still import."""
+        self.loader.load_file(self.signed("again", {
+            "old_helper.py": "VALUE = 1\n", "mill_export.py": "VALUE = 1\n"}, out_name="one.tgm"))
+
+        with self.assertRaises(ImportError):
+            self.loader.load_file(self.signed("again", {
+                "mill_export.py": "from . import old_helper\n"}, out_name="two.tgm"))
+
+    def test_bytes_that_no_longer_match_the_manifest_are_not_imported(self):
+        """Hashed again as they are written out, not trusted to the zip's CRC."""
+        sentinel = os.path.join(self.tmp, "ran")
+        verified = verify(self.signed("swapped", {
+            "mill_export.py": f"open({sentinel!r}, 'w').close()\n"}), profile=PROFILE)
+        verified.manifest["files"]["mill_export.py"] = "sha256:" + "0" * 64
+
+        with self.assertRaises(FileError):
+            self.loader.load(verified)
+        self.assertFalse(os.path.exists(sentinel))
 
 
 class ARefusedModuleTest(LoaderFixture):

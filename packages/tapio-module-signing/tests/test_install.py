@@ -66,6 +66,30 @@ class InstallingAModuleTest(InstallFixture):
         self.assertEqual(pending.manifest["module"], "mill_export.py")
 
 
+class CommittingTest(InstallFixture):
+    def test_a_staged_copy_changed_while_the_operator_decided_is_not_installed(self):
+        pending = prepare_install(self.version("1.0.0"), self.folder, profile=PROFILE)
+        # Another signed version of the same module, put where the staged copy was.
+        os.replace(self.version("6.6.6"), pending.staged_path)
+
+        with self.assertRaises(FileError):
+            pending.commit()
+        self.assertNotIn("com.example.test.tgm", self.folder_contents())
+
+    def test_a_copy_that_cannot_be_removed_is_reported_not_raised(self):
+        prepare_install(self.version("1.0.0"), self.folder, profile=PROFILE).commit()
+        os.replace(os.path.join(self.folder, "com.example.test.tgm"),
+                   os.path.join(self.folder, "old.tgm"))
+        pending = prepare_install(self.version("1.1.0"), self.folder, profile=PROFILE)
+
+        with patch("os.remove", side_effect=PermissionError("in use")):
+            left = pending.commit()
+
+        self.assertEqual(left, [os.path.join(self.folder, "old.tgm")])
+        self.assertEqual(pending.not_removed, left)
+        self.assertIn("com.example.test.tgm", self.folder_contents())
+
+
 class ReplacingAnInstalledOneTest(InstallFixture):
     def test_a_new_version_replaces_the_old_whatever_the_old_file_was_called(self):
         prepare_install(self.version("1.0.0"), self.folder, profile=PROFILE).commit()

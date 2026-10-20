@@ -262,8 +262,6 @@ def _signing(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
             parser.error("--canary-builder, --canary-source and --canary-dir go together")
         canary = None
         if args.canary_builder:
-            if not args.canary_extension.startswith("."):
-                parser.error("--canary-extension starts with a dot, e.g. .tpp")
             canary = Canary(builder=tuple(shlex.split(args.canary_builder)), source=args.canary_source,
                             directory=args.canary_dir, created=args.canary_created,
                             extension=args.canary_extension)

@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 import subprocess
@@ -18,6 +19,7 @@ class FakeGh:
         self.view_error = view_error
         self.commands: list[list[str]] = []
         self.created: list[list[str]] = []
+        self.uploaded: list[list[str]] = []
 
     def __call__(self, args: list[str]) -> subprocess.CompletedProcess:
         self.commands.append(list(args))
@@ -37,7 +39,14 @@ class FakeGh:
             raise subprocess.CalledProcessError(1, args, stderr=self.view_error)
         if args[3] not in self.releases:
             raise subprocess.CalledProcessError(1, args, stderr="release not found")
-        return self._done(args, json.dumps({"tagName": args[3]}))
+        return self._done(args, json.dumps(
+            {"assets": [{"name": name} for name in self.releases[args[3]]]}))
+
+    def _upload(self, args):
+        self.uploaded.append(list(args))
+        for path in args[4:args.index("--repo")]:
+            self.releases[args[3]][Path(path).name] = Path(path).read_bytes()
+        return self._done(args)
 
     def _download(self, args):
         name = self._value(args, "--pattern")
@@ -62,7 +71,8 @@ class KeepTests(unittest.TestCase):
 
     def write_record(self, **changes):
         record = {"id": "export", "version": "1.2.0", "manifest_sha256": "1" * 64,
-                  "key_id": "gadget-2026a", **changes}
+                  "key_id": "gadget-2026a", "file": "export.tpp",
+                  "file_sha256": hashlib.sha256(self.signed.read_bytes()).hexdigest(), **changes}
         path = self.dist / "signing-record.json"
         path.write_text(json.dumps(record), encoding="utf-8")
         return path
@@ -128,6 +138,31 @@ class KeepTests(unittest.TestCase):
                 full = {"id": "export", "version": "1.2.0", **record}
                 with self.assertRaises(SigningError):
                     tag_for(full, prefix)
+
+    def test_a_file_that_is_not_the_one_the_record_describes_is_refused(self) -> None:
+        """Swapped between the jobs, or another module's: the record would be wrong."""
+        self.signed.write_bytes(b"something else")
+        with self.assertRaisesRegex(SigningError, "SHA-256 differs"):
+            self.keep(FakeGh())
+        other = self.dist / "other.tpp"
+        other.write_bytes(b"signed")
+        with self.assertRaisesRegex(SigningError, "record describes"):
+            self.keep(FakeGh(), files=[other])
+        with self.assertRaisesRegex(SigningError, "record describes"):
+            self.keep(FakeGh(), files=[self.dist / "export.tpp", other])
+
+    def test_a_release_left_without_its_signed_file_is_completed(self) -> None:
+        """A run that stopped after the record went up, and before the file did."""
+        gh = FakeGh(releases={"postprocessor/export/v1.2.0": {
+            "signing-record.json": self.record.read_bytes()}})
+
+        kept = self.keep(gh)
+
+        self.assertTrue(kept.created)
+        [upload] = gh.uploaded
+        self.assertEqual([Path(arg).name for arg in upload[4:upload.index("--repo")]],
+                         ["export.tpp"])
+        self.assertEqual(gh.created, [])
 
     def test_nothing_to_keep_is_an_error(self) -> None:
         with self.assertRaisesRegex(SigningError, "no signed file"):
