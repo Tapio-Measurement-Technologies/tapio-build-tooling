@@ -413,7 +413,9 @@ def publish_root_index(
     """The bucket-root page on its own, from whatever the bucket already holds.
 
     A release role is confined to its program's prefix and cannot write the
-    root, so this is run by hand, with credentials that can.
+    root, so this is run by hand, with credentials that can. The page reads
+    each program's manifest in the browser and shows its newest release, so
+    a run is needed only to add a program or rename one.
     """
     client = S3Client(bucket, runner=runner, region=aws_region, dry_run=dry_run)
     output_dir.mkdir(parents=True, exist_ok=True)
