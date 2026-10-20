@@ -1,0 +1,7 @@
+--index-url https://pypi.org/simple
+--only-binary :all:
+
+# What the library needs at run time, held at what the products pin, for
+# tapio-module-signing's own tests in CI. A product resolves the library's
+# dependency in its own lock, which pins cryptography itself.
+cryptography==50.0.1

@@ -1,0 +1,125 @@
+name: Release tapio-module-signing
+
+# Builds the tapio-module-signing wheel from a module-signing-v<version> tag
+# and publishes it as that tag's release, for products to pin by URL; their
+# locks carry its SHA-256. The wheel is built twice and must come out the same
+# both times, so anyone can rebuild the tag and check it against what shipped.
+on:
+  push:
+    tags:
+      - "module-signing-v*"
+
+permissions: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      wheel: ${{ steps.build.outputs.wheel }}
+      sha256: ${{ steps.build.outputs.sha256 }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@7f4fc3e22c37d6ff65e88745f38bd3157c663f7c
+        with:
+          python-version: "3.12"
+
+      - name: Install hashed build and test dependencies
+        run: |
+          python -m pip install --require-hashes -r requirements.txt \
+            -r packages/tapio-module-signing/requirements.txt
+
+      # A release is of something already on main: a tag pushed from a branch
+      # nobody reviewed would otherwise publish whatever that branch held.
+      - name: Check the tag is on main
+        run: |
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::$GITHUB_REF_NAME is not on main"
+            exit 1
+          fi
+
+      - name: Build the wheel twice
+        id: build
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${TAG#module-signing-v}"
+          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          for out in first second; do
+            rm -rf packages/tapio-module-signing/build packages/tapio-module-signing/src/*.egg-info
+            python -m pip wheel --no-deps --no-build-isolation -w "dist/$out" ./packages/tapio-module-signing
+          done
+          wheel="tapio_module_signing-${version}-py3-none-any.whl"
+          if [[ ! -f "dist/first/$wheel" ]]; then
+            echo "::error::$TAG builds $(ls dist/first), not $wheel: is __version__ $version?"
+            exit 1
+          fi
+          cmp "dist/first/$wheel" "dist/second/$wheel"
+          mkdir -p dist/release
+          cp "dist/first/$wheel" dist/release/
+          echo "wheel=$wheel" >> "$GITHUB_OUTPUT"
+          echo "sha256=$(sha256sum "dist/release/$wheel" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      # From the wheel, so a module left out of it fails here, not in a product.
+      - name: Test the wheel as installed
+        run: |
+          python -m pip install --no-deps dist/release/*.whl
+          cd packages/tapio-module-signing/tests
+          python -m unittest discover -v
+
+      - name: Hand the wheel on
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: tapio-module-signing-wheel
+          path: dist/release/
+          retention-days: 1
+
+  # Separate from building, so the job that runs the build and its tests holds
+  # no token that can write to the repository.
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Take the wheel
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: tapio-module-signing-wheel
+          path: dist
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SERVER: ${{ github.server_url }}
+          SHA256: ${{ needs.build.outputs.sha256 }}
+          TAG: ${{ github.ref_name }}
+          WHEEL: ${{ needs.build.outputs.wheel }}
+        run: |
+          set -euo pipefail
+          echo "$SHA256  dist/$WHEEL" | sha256sum --check
+          {
+            echo "tapio-module-signing ${TAG#module-signing-v}."
+            echo
+            echo "Pin it in requirements.in, without a hash:"
+            echo
+            echo '```'
+            echo "tapio-module-signing @ $SERVER/$REPO/releases/download/$TAG/$WHEEL"
+            echo '```'
+            echo
+            echo "SHA-256 \`$SHA256\`, which the compiled lock will carry."
+          } > notes.md
+          gh release create "$TAG" "dist/$WHEEL" --repo "$REPO" --verify-tag \
+            --title "tapio-module-signing ${TAG#module-signing-v}" --notes-file notes.md

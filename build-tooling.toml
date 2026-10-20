@@ -18,3 +18,8 @@ cooldown-days = 7
 name = "tooling"
 input = "requirements.in"
 lock = "requirements.txt"
+
+[[ecosystems.python.requirements]]
+name = "module-signing"
+input = "packages/tapio-module-signing/requirements.in"
+lock = "packages/tapio-module-signing/requirements.txt"
