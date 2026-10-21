@@ -33,3 +33,26 @@ jobs:
           platform: source
           audit: "true"
           upload-name: tapio-build-tooling-source-sbom
+
+  # tapio-module-signing's own lock, which only its tests install: products
+  # resolve its dependency in their own locks, where their audits cover it.
+  module-signing-audit:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@7f4fc3e22c37d6ff65e88745f38bd3157c663f7c
+        with:
+          python-version: "3.12"
+
+      - name: Check and audit the library's test dependencies
+        uses: ./actions/python-release-checks
+        with:
+          config: build-tooling.toml
+          requirement-group: module-signing
+          lock-check: "false"

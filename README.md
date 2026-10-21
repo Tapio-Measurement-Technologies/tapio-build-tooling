@@ -104,6 +104,22 @@ than a pass. A lock-only group carries no hashes, and its releases are dated
 whole. npm releases are dated by the registry's publication time, and a tarball
 resolved from anywhere but the public registry is refused.
 
+A Python lock may also pin a wheel by URL, as long as it is an asset of a
+GitHub release - a first-party library such as `tapio-module-signing`. Write
+it in `requirements.in` without a hash; the compiled lock carries one:
+
+```
+tapio-module-signing @ https://github.com/<owner>/<repo>/releases/download/<tag>/<wheel>
+```
+
+`cooldown` dates it by the later of its upload and its release, through the
+GitHub API, and refuses it unless the asset's digest is the lock's hash - a
+replaced asset is an error, not a pass. The actions hand the API the job's
+token. Any other URL in a lock is refused by `cooldown`, `audit` and `sbom`
+alike. `audit` names each URL wheel as not audited - PyPI does not know it -
+audits its dependencies like any other pin, and fails on anything else it
+cannot audit. The SBOM gives the wheel the version and hash the lock pins.
+
 `audit` still fails on a known vulnerability inside the window, so a cooldown
 delays a fix rather than hiding the need for one.
 
@@ -117,6 +133,8 @@ delays a fix rather than hiding the need for one.
 - `actions/publish-release-notes`: put a GitHub release's notes on its download pages
 - `actions/builder-image`: build the image a build runs in and push it to GHCR
 - `actions/publish-archive`: bundle a build's prepared files and upload them to a private bucket
+- `actions/sign-module`: sign one module with a key in Azure Key Vault, verify it, record it
+- `actions/keep-signed-module`: keep a signed module and its record as a pre-release
 
 A release workflow runs `python-release-checks` before it builds anything and
 `python-release-evidence` after the artifact is signed, with `audit: 'false'`
@@ -414,3 +432,157 @@ runner's system Python. The role needs only `s3:PutObject`,
 ## License
 
 GPL-3.0-or-later. See `LICENSE`.
+
+## Module signing
+
+A product that loads code at runtime - plug-ins, postprocessors - can require
+that code to be signed. The keys live in one Azure Key Vault shared by every
+product; each product gets its own:
+
+```
+<product>-<year>a   active key: the only one its signing pipeline may use
+<product>-<year>b   standby: pinned by the product, disabled in the vault
+```
+
+and its own signing identity: an app registration whose one federated
+credential is one GitHub environment in the product's repository, and whose one
+role is Key Vault Crypto User on that product's active key. A key per product
+keeps a leak of one product's pipeline from signing what another product
+would load; a signing context the product prefixes cannot, because whoever
+signs chooses it.
+
+### The library
+
+`packages/tapio-module-signing` is the verifier a product ships, and the
+builder its signing pipeline runs: the manifest and signature format, the
+checks in the order they must run, the staged install, unpacking and
+importing, and the checks that hold a key table to its canaries. A product
+describes itself in a `Profile` - the keys it pins, the context its
+signatures are taken over, its file extension, what it calls a module - and
+its builder script is that profile handed to `tapio_module_signing.build.main`.
+See its README.
+
+It is released as a wheel from a `module-signing-v<version>` tag on main, by
+`.github/workflows/release-module-signing.yml`, and a product pins it by URL
+as above.
+
+### The builder
+
+What a signed module looks like - its manifest, the context its digest is
+taken over, its file format, the keys that verify it - belongs to the product,
+which ships the verifier. The product supplies a builder command answering:
+
+```
+<builder> manifest --source DIR --out MANIFEST [--created ISO8601]
+<builder> digest --manifest MANIFEST       SHA-256 to sign, standard base64 with padding
+<builder> pack --source DIR --manifest MANIFEST --key-id ID --signature=SIG --out FILE
+<builder> verify --file FILE                checks FILE against the product's pinned keys
+                                            and prints {"id", "version", "key_id"}
+```
+
+`az keyvault key sign --digest` passes its argument to Python's
+`base64.b64decode`, so the digest must be standard base64; unpadded base64url
+fails there with "Incorrect padding". The CLI prints the signature under
+`signature`, in standard base64.
+
+### Provision a product
+
+```bash
+tapio-build signing provision \
+  --subscription SUBSCRIPTION_ID --resource-group RG --location REGION \
+  --vault VAULT --product PRODUCT --repository OWNER/NAME --reviewer LOGIN \
+  [--canary-builder "python scripts/build_module.py" \
+   --canary-source path/to/canary --canary-dir path/to/canaries \
+   --canary-extension .tpp] \
+  --dry-run
+```
+
+Creates what is missing and leaves what is right: the Key Vault provider
+registration, the group, the vault (Standard, Azure RBAC, purge protection,
+90-day soft delete), both keys, a canary per key if asked, the identity, its
+federated credential, its role on the active key, and the GitHub environment -
+limited to one branch, a named reviewer, with the identity's IDs as secrets
+and `SIGNING_VAULT` and `SIGNING_KEY_NAME` as variables. `--no-reviewer`
+sets the environment up without a reviewer instead, and anyone who can push to
+the branch can then sign. It prints the public keys in the form a product's key
+table holds them.
+
+The signed-in user is given Key Vault Crypto Officer on the vault for the run
+and loses it at the end, even when a step fails (`--keep-admin` keeps it). A
+rerun changes nothing except that role and enabling the standby long enough to
+read its public key. `--dry-run` performs every lookup and prints every change
+instead of making it. Purge protection cannot be turned off once the vault
+has it; to try a new setup out first, pass `--no-purge-protection`, and run
+again without it once everything works - that run turns it on.
+
+Nothing about a deployment lives here. Keep the concrete invocation - which
+subscription, vault, products and reviewers - in the product's private
+repository.
+
+### Sign in a workflow
+
+```yaml
+jobs:
+  sign:
+    runs-on: ubuntu-latest
+    environment: module-signing
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@<sha>
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@<sha>
+        with:
+          python-version: "3.12"
+      - uses: Tapio-Measurement-Technologies/tapio-build-tooling/actions/sign-module@<sha>
+        with:
+          builder: python scripts/build_module.py
+          source: modules/example
+          expect-id: example
+          output: dist/example.tpp
+          record: dist/signing-record.json
+          vault: ${{ vars.SIGNING_VAULT }}
+          key-name: ${{ vars.SIGNING_KEY_NAME }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+```
+
+The action verifies the signed file with the product's own builder before
+calling it signed, so a key the product does not pin stops the run, and writes
+a record - id, version, key, manifest and file SHA-256, commit, run - to the
+job summary and to `signing-record.json`. With `expect-id` it also fails
+unless the module verifies as that id.
+
+### Keep what was signed
+
+Hand the signed file and its record to a second job, which may write to the
+repository and cannot sign:
+
+```yaml
+  keep:
+    needs: sign
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@<sha>
+        with:
+          name: signed-module
+          path: dist
+      - uses: actions/setup-python@<sha>
+        with:
+          python-version: "3.12"
+      - uses: Tapio-Measurement-Technologies/tapio-build-tooling/actions/keep-signed-module@<sha>
+        with:
+          files: dist/*.tpp
+          record: dist/signing-record.json
+          tag-prefix: module
+          kind: module
+```
+
+It keeps them as a pre-release tagged `<tag-prefix>/<id>/v<version>`, never
+Latest. Signing the same content again changes nothing; different content
+under a version already issued is refused, so raise the version instead.

@@ -48,6 +48,9 @@ runs:
       env:
         CONFIG: ${{ inputs.config }}
         GROUP: ${{ inputs.requirement-group }}
+        # For a wheel pinned from a GitHub release: dated through the GitHub
+        # API, which allows an unauthenticated runner few requests an hour.
+        GITHUB_TOKEN: ${{ github.token }}
       run: tapio-build --project "$GITHUB_WORKSPACE" --config "$CONFIG" python cooldown --group "$GROUP"
 
     - name: Audit runtime dependencies
