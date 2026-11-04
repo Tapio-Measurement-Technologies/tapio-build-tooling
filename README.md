@@ -311,6 +311,17 @@ Only `--root-index` writes the bucket root. Serialise release jobs with a
 `concurrency` group: two publishes racing on one manifest keep only the last.
 `robots.txt` belongs to the bucket's owner, not the tooling.
 
+### Telling users about a newer release
+
+A product that offers its users a newer release reads `<slug>/releases.json`
+with `packages/tapio-update-check`: where the manifest and the page are, which
+release in it is the newest final one, and whether to offer it to the running
+copy. Fetching it, asking consent and showing the notice stay in the product.
+`tests/test_update_check_contract.py` holds that reader to the manifest this
+tooling writes. It is released from an `update-check-v<version>` tag by
+`.github/workflows/release-library.yml` and pinned by URL like
+`tapio-module-signing`. See its README.
+
 ## Release archives
 
 `tapio-build archive publish` keeps a build's outputs in a private bucket,
@@ -463,7 +474,7 @@ its builder script is that profile handed to `tapio_module_signing.build.main`.
 See its README.
 
 It is released as a wheel from a `module-signing-v<version>` tag on main, by
-`.github/workflows/release-module-signing.yml`, and a product pins it by URL
+`.github/workflows/release-library.yml`, and a product pins it by URL
 as above.
 
 ### The builder

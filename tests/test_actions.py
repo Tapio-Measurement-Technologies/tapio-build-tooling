@@ -5,7 +5,26 @@ import unittest
 
 
 ROOT = Path(__file__).parents[1]
-LIBRARY = ROOT / "packages/tapio-module-signing"
+SIGNING_LIBRARY = ROOT / "packages/tapio-module-signing"
+UPDATE_CHECK_LIBRARY = ROOT / "packages/tapio-update-check"
+# Each library products install, with the tag prefix it is released from and
+# all it may depend on: products bundle it, so whatever it pulls in, every
+# product ships.
+LIBRARIES = {
+    SIGNING_LIBRARY: ("module-signing-v", ["cryptography"]),
+    UPDATE_CHECK_LIBRARY: ("update-check-v", ["packaging"]),
+}
+RELEASE_WORKFLOW = ROOT / ".github/workflows/release-library.yml"
+
+
+def pins(lock: Path) -> dict[str, str]:
+    """The name==version lines of a compiled lock."""
+    found = {}
+    for line in lock.read_text(encoding="utf-8").splitlines():
+        match = re.match(r"^([A-Za-z0-9._-]+)==([^\s;]+)", line)
+        if match:
+            found[match.group(1).lower()] = match.group(2)
+    return found
 
 
 class ActionTests(unittest.TestCase):
@@ -36,13 +55,13 @@ class ActionTests(unittest.TestCase):
             for raw_line in (ROOT / "requirements.in").read_text(encoding="utf-8").splitlines()
             if (line := raw_line.strip()) and not line.startswith(("#", "--"))
         }
-        for path in [ROOT / "pyproject.toml", LIBRARY / "pyproject.toml"]:
+        for path in [ROOT / "pyproject.toml", *(library / "pyproject.toml" for library in LIBRARIES)]:
             with self.subTest(pyproject=str(path.relative_to(ROOT))):
                 pyproject = tomllib.loads(path.read_text(encoding="utf-8"))
                 self.assertLessEqual(set(pyproject["build-system"]["requires"]), lock_inputs)
 
     def test_the_library_release_builds_from_main_and_writes_only_to_publish(self) -> None:
-        workflow = (ROOT / ".github/workflows/release-module-signing.yml").read_text(encoding="utf-8")
+        workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("\npermissions: {}\n", workflow)
         build, publish = workflow.split("\n  publish:\n")
         self.assertIn("contents: read", build)
@@ -54,12 +73,35 @@ class ActionTests(unittest.TestCase):
         self.assertIn('cmp "dist/first/$wheel" "dist/second/$wheel"', build)
         self.assertIn("--verify-tag", publish)
 
-    def test_the_library_needs_nothing_but_cryptography(self) -> None:
+    def test_every_library_is_released_by_its_own_tag_and_no_other(self) -> None:
+        workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        self.assertEqual(sorted(path.name for path in (ROOT / "packages").iterdir() if path.is_dir()),
+                         sorted(library.name for library in LIBRARIES))
+        tag_patterns = re.findall(r'^      - "([a-z-]+-v)\*"$', workflow, flags=re.MULTILINE)
+        arms = re.findall(r"^            ([a-z-]+-v)\*\) package=([a-z-]+); prefix=([a-z-]+-v) ;;$",
+                          workflow, flags=re.MULTILINE)
+        self.assertEqual(sorted(tag_patterns), sorted(prefix for prefix, _ in LIBRARIES.values()))
+        self.assertEqual(sorted(arms), sorted((prefix, library.name, prefix)
+                                              for library, (prefix, _) in LIBRARIES.items()))
+        self.assertIn('*) echo "::error::$TAG names no library"; exit 1 ;;', workflow)
+
+    def test_each_library_needs_nothing_but_what_it_is_allowed(self) -> None:
         """Products bundle it; whatever it pulls in, every product ships."""
-        pyproject = tomllib.loads((LIBRARY / "pyproject.toml").read_text(encoding="utf-8"))
-        self.assertEqual([re.split(r"[<>=!~ ]", dependency)[0]
-                          for dependency in pyproject["project"]["dependencies"]],
-                         ["cryptography"])
+        for library, (_, allowed) in LIBRARIES.items():
+            with self.subTest(library=library.name):
+                pyproject = tomllib.loads((library / "pyproject.toml").read_text(encoding="utf-8"))
+                self.assertEqual([re.split(r"[<>=!~ ]", dependency)[0]
+                                  for dependency in pyproject["project"]["dependencies"]],
+                                 allowed)
+
+    def test_a_library_lock_agrees_with_the_tooling_lock(self) -> None:
+        """CI installs the tooling lock and every library's together."""
+        tooling = pins(ROOT / "requirements.txt")
+        for library in LIBRARIES:
+            for name, version in pins(library / "requirements.txt").items():
+                if name in tooling:
+                    with self.subTest(library=library.name, package=name):
+                        self.assertEqual(version, tooling[name])
 
     def test_release_checks_validate_before_auditing(self) -> None:
         action = (ROOT / "actions/python-release-checks" / "action.yml").read_text(
@@ -124,7 +166,7 @@ class ActionTests(unittest.TestCase):
 
     def test_signing_code_carries_no_deployment_of_its_own(self) -> None:
         paths = [*(ROOT / "src/tapio_build_tools/signing").glob("*.py"),
-                 *(LIBRARY / "src/tapio_module_signing").glob("*.py")]
+                 *(SIGNING_LIBRARY / "src/tapio_module_signing").glob("*.py")]
         self.assertGreater(len(paths), 8)
         for path in paths:
             text = path.read_text(encoding="utf-8")
@@ -133,6 +175,16 @@ class ActionTests(unittest.TestCase):
                     self.assertNotIn(literal, text)
             self.assertIsNone(re.search(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", text),
                               f"a GUID in {path.name}")
+
+    def test_update_check_carries_no_deployment_of_its_own(self) -> None:
+        """Which site and which program are the product's to say."""
+        paths = [*(UPDATE_CHECK_LIBRARY / "src/tapio_update_check").glob("*.py")]
+        self.assertTrue(paths)
+        for path in paths:
+            text = path.read_text(encoding="utf-8")
+            for literal in ["tapiotechnologies", "Tapio-Measurement-Technologies", "cloudfront", "amazonaws.com"]:
+                with self.subTest(file=path.name, literal=literal):
+                    self.assertNotIn(literal, text)
 
     def test_publish_downloads_carries_no_deployment_of_its_own(self) -> None:
         """The tooling is public; buckets, roles and addresses belong to the consumer."""

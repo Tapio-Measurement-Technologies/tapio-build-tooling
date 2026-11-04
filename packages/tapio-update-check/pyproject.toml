@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools==83.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tapio-update-check"
+dynamic = ["version"]
+description = "Read a program's release manifest from the download site and choose which release to offer"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
+authors = [
+  { name = "Tapio Measurement Technologies Oy" },
+]
+dependencies = [
+  "packaging>=22",
+]
+
+[tool.setuptools.dynamic]
+version = { attr = "tapio_update_check.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]

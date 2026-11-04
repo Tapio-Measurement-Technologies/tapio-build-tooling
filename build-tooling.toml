@@ -23,3 +23,8 @@ lock = "requirements.txt"
 name = "module-signing"
 input = "packages/tapio-module-signing/requirements.in"
 lock = "packages/tapio-module-signing/requirements.txt"
+
+[[ecosystems.python.requirements]]
+name = "update-check"
+input = "packages/tapio-update-check/requirements.in"
+lock = "packages/tapio-update-check/requirements.txt"
