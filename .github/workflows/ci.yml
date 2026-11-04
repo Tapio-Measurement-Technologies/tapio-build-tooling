@@ -26,8 +26,10 @@ jobs:
       - name: Install hashed tooling dependencies
         run: |
           python -m pip install --require-hashes -r requirements.txt \
-            -r packages/tapio-module-signing/requirements.txt
-          python -m pip install --no-deps --no-build-isolation . ./packages/tapio-module-signing
+            -r packages/tapio-module-signing/requirements.txt \
+            -r packages/tapio-update-check/requirements.txt
+          python -m pip install --no-deps --no-build-isolation . ./packages/tapio-module-signing \
+            ./packages/tapio-update-check
 
       - name: Validate package
         run: |
@@ -41,3 +43,6 @@ jobs:
         working-directory: packages/tapio-module-signing/tests
         run: python -m unittest discover -v
 
+      - name: Test tapio-update-check
+        working-directory: packages/tapio-update-check/tests
+        run: python -m unittest discover -v

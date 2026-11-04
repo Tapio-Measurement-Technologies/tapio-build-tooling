@@ -1,0 +1,7 @@
+--index-url https://pypi.org/simple
+--only-binary :all:
+
+# What the library needs at run time, held at what the tooling lock pins (CI
+# installs both locks together), for tapio-update-check's own tests in CI. A
+# product resolves the library's dependency in its own lock.
+packaging==26.2
