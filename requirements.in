@@ -4,7 +4,8 @@
 cyclonedx-bom==7.3.0
 packaging==26.2
 pip-audit==2.10.1
-setuptools==83.0.0
+# 84.1.0 fixes GHSA-xmj3-9gf7-h52w.
+setuptools==84.1.0
 # 0.13.4 fixes PYSEC-2026-4321. Taken inside the cooldown, with --no-cooldown.
 uv==0.13.4
 
@@ -16,3 +17,9 @@ urllib3>=2.8.0
 # above 2026.10.19, which fixes PYSEC-2026-4320; taken inside the cooldown,
 # with --no-cooldown.
 certifi>=2026.10.19
+
+# Not used directly: cachecontrol brings them in, for pip-audit. Held at or
+# above 4.2.1, which fixes CVE-2026-112907 to -112915 and -112935 to -112940,
+# and 1.2.3, which fixes CVE-2026-114613.
+filelock>=4.2.1
+msgpack>=1.2.3
