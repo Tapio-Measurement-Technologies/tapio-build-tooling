@@ -14,7 +14,7 @@ from tapio_build_tools.archive import ArchiveError
 from tapio_build_tools.archive.publish import names as archive_names
 from tapio_build_tools.archive.publish import publish_archive
 from tapio_build_tools.config import ConfigError, load_config
-from tapio_build_tools.cooldown import CooldownError, cutoff, timestamp
+from tapio_build_tools.cooldown import CooldownError, Pinned, cutoff, timestamp
 from tapio_build_tools.downloads import DownloadsError
 from tapio_build_tools.downloads.publish import (
     publish_downloads,
@@ -227,6 +227,15 @@ def _window(
     return cutoff(chosen)
 
 
+def _window_summary(pinned: list[Pinned], moment: datetime) -> str:
+    """How many releases a passing cooldown check read, and how many it excepted."""
+    excepted = sum(1 for release in pinned if release.published > moment)
+    if excepted:
+        return (f"{len(pinned)} release(s), none newer than {timestamp(moment)} "
+                f"other than {excepted} excepted")
+    return f"{len(pinned)} release(s), none newer than {timestamp(moment)}"
+
+
 def _signing(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     """The signing commands, which need no build-tooling.toml."""
     if args.signing_command == "sign":
@@ -327,7 +336,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"{args.group}: no cooldown configured")
                 return 0
             pinned = check_python_cooldown(config, args.group, moment)
-            print(f"{args.group}: {len(pinned)} release(s), none newer than {timestamp(moment)}")
+            print(f"{args.group}: {_window_summary(pinned, moment)}")
             return 0
         if args.command == "python" and args.python_command == "audit":
             audit(config, args.group)
@@ -355,7 +364,7 @@ def main(argv: list[str] | None = None) -> int:
                 print("package-lock.json: no cooldown configured")
                 return 0
             pinned = check_node_cooldown(config, moment)
-            print(f"package-lock.json: {len(pinned)} release(s), none newer than {timestamp(moment)}")
+            print(f"package-lock.json: {_window_summary(pinned, moment)}")
             return 0
         if args.command == "node" and args.node_command == "audit":
             audit_node(config)
@@ -471,6 +480,9 @@ def main(argv: list[str] | None = None) -> int:
         SbomError,
         ValueError,
     ) as exc:
+        # What was printed before the failure - each finding an audit read,
+        # say - belongs above the error in a log that interleaves the two.
+        sys.stdout.flush()
         print(f"tapio-build: error: {exc}", file=sys.stderr)
         return 2
     parser.error("unsupported command")

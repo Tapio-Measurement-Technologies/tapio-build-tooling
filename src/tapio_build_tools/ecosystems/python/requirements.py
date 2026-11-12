@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime, timedelta
 import os
 from pathlib import Path
 import shutil
@@ -11,8 +11,10 @@ import subprocess
 import sys
 import tempfile
 
-from tapio_build_tools import cooldown
+from tapio_build_tools import cooldown, risks
 from tapio_build_tools.config import Config, ConfigError, RequirementGroup
+from tapio_build_tools.cooldown import CooldownError
+from tapio_build_tools.ecosystems.python.cooldown import published_release
 
 
 class RequirementsError(RuntimeError):
@@ -46,12 +48,40 @@ def _cutoff(days: int, *, now: datetime | None = None) -> str:
     return cooldown.timestamp(cooldown.cutoff(days, now=now))
 
 
+def _excepted(config: Config, cutoff: str, *, today: date | None = None) -> dict[str, str]:
+    """A cutoff of its own for each release excepted from the cooldown.
+
+    Without one, uv's cutoff makes a release younger than the window
+    unsatisfiable, so a lock that pins it fails `compile --check` as well as
+    `cooldown`. Each current exception moves its package's cutoff to just
+    after the release it names - not to now, which would let a newer release
+    of the package in unexcepted. An exception whose release is older than
+    the window gets none: the global cutoff already allows it, and an earlier
+    one of its own would hold the package back.
+    """
+    moment = cooldown.published(cutoff)
+    on = today or risks.today()
+    cutoffs: dict[str, str] = {}
+    for exception in config.require_python().cooldown_exceptions:
+        if not exception.active(on):
+            continue
+        released = published_release(exception.package, exception.version)
+        if released <= moment:
+            continue
+        name = risks.package_key(exception.package, "python")
+        cutoffs[name] = cooldown.timestamp(released + timedelta(seconds=1))
+        print(f"{exception.label}: excepted from the cooldown by {exception.source}; "
+              f"released {cooldown.timestamp(released)}")
+    return cutoffs
+
+
 def _command(
     config: Config,
     group: RequirementGroup,
     output: Path,
     upgrade: bool,
     cutoff: str | None,
+    package_cutoffs: dict[str, str] | None = None,
 ) -> list[str]:
     if group.input is None:
         raise AssertionError("lock-only groups cannot be compiled")
@@ -77,6 +107,8 @@ def _command(
     ]
     if cutoff is not None:
         command += ["--exclude-newer", cutoff]
+        for name, moment in sorted((package_cutoffs or {}).items()):
+            command += ["--exclude-newer-package", f"{name}={moment}"]
     if upgrade:
         command.append("--upgrade")
     command.append(str(group.input.relative_to(config.project)))
@@ -135,6 +167,10 @@ def compile_requirements(
         if cooldown and python.cooldown_days is not None
         else None
     )
+    try:
+        package_cutoffs = _excepted(config, cutoff) if cutoff is not None else {}
+    except CooldownError as exc:
+        raise RequirementsError(f"dating a cooldown exception failed: {exc}") from exc
     results: list[CompileResult] = []
     stale: list[str] = []
     for group in groups:
@@ -151,7 +187,7 @@ def compile_requirements(
             shutil.copy2(group.lock, temporary)
         try:
             subprocess.run(
-                _command(config, group, temporary, upgrade, cutoff),
+                _command(config, group, temporary, upgrade, cutoff, package_cutoffs),
                 cwd=config.project,
                 check=True,
             )

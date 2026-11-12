@@ -4,18 +4,29 @@ Compiling with a cooldown keeps a fresh release out of a lock this tooling
 writes. A lock can reach the repository another way - npm writes its own, and
 any lock can be edited by hand - so the ages are asked of the index again,
 from the lock itself, whatever wrote it.
+
+A release taken inside the window on purpose - a security fix, say - is named
+in the configuration as a cooldown exception: that release, at that version,
+with the reason. It is let through while it is younger than the window and
+until its review-by date, if it has one. Once the release is older than the
+window the entry does nothing, and is flagged so that it is removed.
 """
 
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 import json
-from typing import Callable, Iterable, Mapping, TypeVar
+from typing import Callable, Iterable, Mapping, Sequence, TypeVar
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
+
+from packaging.version import InvalidVersion, Version
+
+from tapio_build_tools import risks
+from tapio_build_tools.config import CooldownException
 
 
 class CooldownError(RuntimeError):
@@ -87,21 +98,89 @@ def gather(work: Callable[[Item], Result], items: Iterable[Item]) -> list[Result
 
 @dataclass(frozen=True)
 class Pinned:
-    """One release a lock pins, named the way its ecosystem names it."""
+    """One release a lock pins, named the way its ecosystem names it.
+
+    *package* and *version* are what a cooldown exception is matched by.
+    """
 
     label: str
     published: datetime
+    package: str = ""
+    version: str = ""
 
 
-def refuse_young(pinned: Iterable[Pinned], moment: datetime) -> list[Pinned]:
-    """*pinned* as a list, or an error naming everything newer than *moment*."""
+def release_key(package: str, version: str, ecosystem: str) -> tuple[str, object]:
+    """A release as *ecosystem* compares them: Python normalises both parts."""
+    if ecosystem == "python":
+        try:
+            return risks.package_key(package, ecosystem), Version(version)
+        except InvalidVersion:
+            pass
+    return risks.package_key(package, ecosystem), version
+
+
+def refuse_young(
+    pinned: Iterable[Pinned],
+    moment: datetime,
+    exceptions: Sequence[CooldownException] = (),
+    *,
+    ecosystem: str = "python",
+    on: date | None = None,
+    packages: set[str] | None = None,
+    subject: str = "lock",
+) -> list[Pinned]:
+    """*pinned* as a list, or an error naming everything newer than *moment*.
+
+    A young release a current entry in *exceptions* names is let through and
+    printed with its reason. An entry that lets nothing through is flagged:
+    its release is older than the window, or not in the lock at all. With
+    *packages* - the package keys this lock pins, where several locks share
+    the entries - an entry for a package outside them is left to its own lock.
+    """
     releases = list(pinned)
-    young = sorted(
-        (release for release in releases if release.published > moment),
-        key=lambda release: release.published,
-        reverse=True,
-    )
+    on = on or risks.today()
+    by_key: dict[tuple[str, object], CooldownException] = {}
+    for exception in exceptions:
+        by_key.setdefault(release_key(exception.package, exception.version, ecosystem), exception)
+
+    young: list[Pinned] = []
+    lapsed: dict[Pinned, CooldownException] = {}
+    excused: list[tuple[Pinned, CooldownException]] = []
+    used: set[CooldownException] = set()
+    for release in sorted(releases, key=lambda item: item.published, reverse=True):
+        exception = by_key.get(release_key(release.package, release.version, ecosystem))
+        if exception is not None:
+            used.add(exception)
+        if release.published <= moment:
+            if exception is not None:
+                risks.warn(f"{subject}: {exception.source} excepts {exception.label} from the "
+                           f"cooldown, and it was released {timestamp(release.published)}, before "
+                           f"the window; remove the entry")
+            continue
+        if exception is not None and exception.active(on):
+            excused.append((release, exception))
+        else:
+            if exception is not None:
+                lapsed[release] = exception
+            young.append(release)
+
+    for release, exception in excused:
+        print(f"accepted inside the cooldown: {release.label} ({timestamp(release.published)}) - "
+              f"{exception.source}: {exception.reason}")
+    for exception in exceptions:
+        if exception in used:
+            continue
+        key = release_key(exception.package, exception.version, ecosystem)
+        if packages is not None and key[0] not in packages:
+            continue
+        risks.warn(f"{subject}: {exception.source} excepts {exception.label} from the cooldown, "
+                   f"and the lock does not pin it; remove the entry")
     if young:
-        named = ", ".join(f"{release.label} ({timestamp(release.published)})" for release in young)
+        named = ", ".join(
+            f"{release.label} ({timestamp(release.published)})"
+            + (f", whose exception in {lapsed[release].source} lapsed after "
+               f"{lapsed[release].review_by.isoformat()}" if release in lapsed else "")
+            for release in young
+        )
         raise CooldownError(f"released after {timestamp(moment)}: {named}")
     return releases

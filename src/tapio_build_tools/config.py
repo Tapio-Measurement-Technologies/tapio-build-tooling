@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date, datetime
 from pathlib import Path
 import re
 from string import Template
 import tomllib
-from typing import Any
+from typing import Any, Callable
+
+from packaging.utils import canonicalize_name
+from packaging.version import InvalidVersion, Version
 
 
 class ConfigError(ValueError):
@@ -24,6 +28,16 @@ DEFAULT_ARCHIVE = {"windows": "zip", "linux": "tar.gz", "macos": "tar.gz"}
 # A slug is a path segment in a bucket and a prefix of every file name under it.
 SLUG_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 VERSION_PLACEHOLDER = "version"
+# The advisory ids an accepted risk may name, as the audits report them.
+ADVISORY_IDS = {
+    "PYSEC": re.compile(r"^PYSEC-\d{4}-\d+$"),
+    # GitHub's own alphabet, in lower case as both npm and pip-audit print it.
+    "GHSA": re.compile(r"^GHSA(?:-[23456789cfghjmpqrvwx]{4}){3}$"),
+    "CVE": re.compile(r"^CVE-\d{4}-\d{4,}$"),
+}
+# npm audit names an advisory by its GitHub URL alone, so GHSA is all it can match.
+NODE_ADVISORY_IDS = ("GHSA",)
+PYTHON_ADVISORY_IDS = ("PYSEC", "GHSA", "CVE")
 
 
 @dataclass(frozen=True)
@@ -44,6 +58,49 @@ class Product:
 
 
 @dataclass(frozen=True)
+class AcceptedRisk:
+    """A known advisory a product carries on purpose, until it is reviewed.
+
+    *source* says where the entry is configured, so that a message about it
+    points at the line to change. *ecosystem* is the table it came from:
+    "python" or "node".
+    """
+
+    id: str
+    package: str
+    reason: str
+    review_by: date
+    source: str
+    ecosystem: str
+
+    def active(self, today: date) -> bool:
+        """Whether it still applies: through its review-by date, not after."""
+        return today <= self.review_by
+
+
+@dataclass(frozen=True)
+class CooldownException:
+    """A release taken inside the cooldown on purpose - a security fix, say.
+
+    It applies while the release is younger than the window and, if
+    *review_by* is set, until that date; after either it applies no more.
+    """
+
+    package: str
+    version: str
+    reason: str
+    review_by: date | None
+    source: str
+
+    @property
+    def label(self) -> str:
+        return f"{self.package} {self.version}"
+
+    def active(self, today: date) -> bool:
+        return self.review_by is None or today <= self.review_by
+
+
+@dataclass(frozen=True)
 class RequirementGroup:
     name: str
     lock: Path
@@ -58,6 +115,8 @@ class PythonEcosystem:
     # pick it. A poisoned release is usually caught and pulled within hours,
     # so waiting keeps it out of a lock nobody had reason to compile that day.
     cooldown_days: int | None = None
+    accepted_risks: tuple[AcceptedRisk, ...] = ()
+    cooldown_exceptions: tuple[CooldownException, ...] = ()
 
     def requirement(self, name: str) -> RequirementGroup:
         for group in self.requirements:
@@ -75,6 +134,8 @@ class NodeEcosystem:
     # npm writes this lock, so the wait is checked against the registry rather
     # than handed to a resolver. See PythonEcosystem.cooldown_days.
     cooldown_days: int | None = None
+    accepted_risks: tuple[AcceptedRisk, ...] = ()
+    cooldown_exceptions: tuple[CooldownException, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -297,7 +358,11 @@ def load_config(
     python: PythonEcosystem | None = None
     if "python" in ecosystems_data:
         python_data = _table(ecosystems_data["python"], "ecosystems.python")
-        _keys(python_data, {"version", "requirements", "cooldown-days"}, "ecosystems.python")
+        _keys(
+            python_data,
+            {"version", "requirements", "cooldown-days", "accepted-risks", "cooldown-exceptions"},
+            "ecosystems.python",
+        )
         version = _required_string(python_data, "version", "ecosystems.python")
         cooldown_days = _cooldown_days(python_data, "ecosystems.python")
         raw_groups = python_data.get("requirements")
@@ -333,13 +398,25 @@ def load_config(
                 )
             )
         python = PythonEcosystem(
-            version=version, requirements=tuple(groups), cooldown_days=cooldown_days
+            version=version,
+            requirements=tuple(groups),
+            cooldown_days=cooldown_days,
+            accepted_risks=_accepted_risks(
+                python_data, "ecosystems.python", "python", PYTHON_ADVISORY_IDS, _python_package
+            ),
+            cooldown_exceptions=_cooldown_exceptions(
+                python_data, "ecosystems.python", _python_package, _python_version
+            ),
         )
 
     node: NodeEcosystem | None = None
     if "node" in ecosystems_data:
         node_data = _table(ecosystems_data["node"], "ecosystems.node")
-        _keys(node_data, {"version", "package", "lock", "cooldown-days"}, "ecosystems.node")
+        _keys(
+            node_data,
+            {"version", "package", "lock", "cooldown-days", "accepted-risks", "cooldown-exceptions"},
+            "ecosystems.node",
+        )
         package = _project_path(
             project_root,
             _required_string(node_data, "package", "ecosystems.node"),
@@ -363,6 +440,12 @@ def load_config(
             package=package,
             lock=lock,
             cooldown_days=_cooldown_days(node_data, "ecosystems.node"),
+            accepted_risks=_accepted_risks(
+                node_data, "ecosystems.node", "node", NODE_ADVISORY_IDS, _node_package
+            ),
+            cooldown_exceptions=_cooldown_exceptions(
+                node_data, "ecosystems.node", _node_package, _node_version
+            ),
         )
 
     downloads: Downloads | None = None
@@ -392,6 +475,122 @@ def _cooldown_days(table: dict[str, Any], label: str) -> int | None:
     ):
         raise ConfigError(f"{label}.cooldown-days must be a whole number of days from 1 to 365")
     return value
+
+
+def _review_by(table: dict[str, Any], label: str, *, required: bool) -> date | None:
+    """A date the entry is reviewed by: a TOML date, 2027-01-31, or that as a string."""
+    value = table.get("review-by")
+    if value is None:
+        if required:
+            raise ConfigError(f"{label}.review-by is required: the date the entry is next reviewed")
+        return None
+    if isinstance(value, str):
+        try:
+            value = date.fromisoformat(value)
+        except ValueError:
+            pass
+    # A TOML datetime is a date too, to Python; a time of day has no place here.
+    if isinstance(value, datetime) or not isinstance(value, date):
+        raise ConfigError(f"{label}.review-by must be a date, such as 2027-01-31")
+    return value
+
+
+def _python_package(value: str, label: str) -> str:
+    if not re.match(r"^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$", value):
+        raise ConfigError(f"{label}.package is not a Python package name: {value}")
+    return canonicalize_name(value)
+
+
+def _python_version(value: str, label: str) -> Version:
+    """*value* as a version, which compares 1.0 and 1.0.0 equal as pip does."""
+    try:
+        return Version(value)
+    except InvalidVersion as exc:
+        raise ConfigError(f"{label}.version is not a Python version: {value}") from exc
+
+
+def _node_package(value: str, label: str) -> str:
+    if not re.match(r"^(@[a-z0-9][a-z0-9._~-]*/)?[a-z0-9][a-z0-9._~-]*$", value):
+        raise ConfigError(f"{label}.package is not an npm package name: {value}")
+    return value
+
+
+def _node_version(value: str, label: str) -> str:
+    if not re.match(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.+-]+)?$", value):
+        raise ConfigError(f"{label}.version is not an npm version: {value}")
+    return value
+
+
+def _entries(table: dict[str, Any], key: str, label: str) -> list[tuple[str, dict[str, Any]]]:
+    raw = table.get(key, [])
+    if not isinstance(raw, list):
+        raise ConfigError(f"{label}.{key} must be an array of tables")
+    return [(f"{label}.{key}[{index}]", _table(entry, f"{label}.{key}[{index}]"))
+            for index, entry in enumerate(raw)]
+
+
+def _accepted_risks(
+    table: dict[str, Any],
+    label: str,
+    ecosystem: str,
+    allowed: tuple[str, ...],
+    package_name: Callable[[str, str], str],
+) -> tuple[AcceptedRisk, ...]:
+    """The advisories an ecosystem's audit accepts, each until its review-by date."""
+    risks: list[AcceptedRisk] = []
+    seen: dict[tuple[str, str], str] = {}
+    for entry_label, entry in _entries(table, "accepted-risks", label):
+        _keys(entry, {"id", "package", "reason", "review-by"}, entry_label)
+        advisory = _required_string(entry, "id", entry_label).strip()
+        if not any(ADVISORY_IDS[kind].match(advisory) for kind in allowed):
+            raise ConfigError(
+                f"{entry_label}.id is not a {' or '.join(allowed)} id: {advisory}"
+                + ("; npm audit reports GitHub advisories only" if allowed == NODE_ADVISORY_IDS else "")
+            )
+        package = _required_string(entry, "package", entry_label).strip()
+        key = (advisory, package_name(package, entry_label))
+        if key in seen:
+            raise ConfigError(f"{entry_label} accepts {advisory} for {package} again; see {seen[key]}")
+        seen[key] = entry_label
+        risks.append(AcceptedRisk(
+            id=advisory,
+            package=package,
+            reason=_required_string(entry, "reason", entry_label).strip(),
+            review_by=_review_by(entry, entry_label, required=True),
+            source=entry_label,
+            ecosystem=ecosystem,
+        ))
+    return tuple(risks)
+
+
+def _cooldown_exceptions(
+    table: dict[str, Any],
+    label: str,
+    package_name: Callable[[str, str], str],
+    version_key: Callable[[str, str], object],
+) -> tuple[CooldownException, ...]:
+    """The releases a cooldown check accepts while they are younger than the window."""
+    exceptions: list[CooldownException] = []
+    seen: dict[tuple[str, object], str] = {}
+    entries = _entries(table, "cooldown-exceptions", label)
+    if entries and table.get("cooldown-days") is None:
+        raise ConfigError(f"{label}.cooldown-exceptions needs {label}.cooldown-days to except from")
+    for entry_label, entry in entries:
+        _keys(entry, {"package", "version", "reason", "review-by"}, entry_label)
+        package = _required_string(entry, "package", entry_label).strip()
+        version = _required_string(entry, "version", entry_label).strip()
+        key = (package_name(package, entry_label), version_key(version, entry_label))
+        if key in seen:
+            raise ConfigError(f"{entry_label} excepts {package} {version} again; see {seen[key]}")
+        seen[key] = entry_label
+        exceptions.append(CooldownException(
+            package=package,
+            version=version,
+            reason=_required_string(entry, "reason", entry_label).strip(),
+            review_by=_review_by(entry, entry_label, required=False),
+            source=entry_label,
+        ))
+    return tuple(exceptions)
 
 
 def _optional_bool(table: dict[str, Any], key: str, label: str, default: bool) -> bool:

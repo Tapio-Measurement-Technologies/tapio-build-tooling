@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 import json
 from pathlib import Path
 from urllib.parse import quote
@@ -66,12 +66,18 @@ def _dated(pin: tuple[str, set[str]]) -> list[Pinned]:
         moment = times.get(version)
         if not isinstance(moment, str):
             raise CooldownError(f"the npm registry gives no publication time for {name}@{version}")
-        dated.append(Pinned(f"{name}@{version}", published(moment)))
+        dated.append(Pinned(f"{name}@{version}", published(moment), name, version))
     return dated
 
 
-def check(config: Config, moment: datetime) -> list[Pinned]:
-    """Every release the package lock pins, or an error naming the young ones."""
-    pins = read_pins(config.require_node().lock)
+def check(config: Config, moment: datetime, *, today: date | None = None) -> list[Pinned]:
+    """Every release the package lock pins, or an error naming the young ones.
+
+    A release a cooldown exception names is let through while it applies.
+    """
+    node = config.require_node()
+    pins = read_pins(node.lock)
     dated = gather(_dated, sorted(pins.items()))
-    return refuse_young([release for package in dated for release in package], moment)
+    return refuse_young([release for package in dated for release in package], moment,
+                        node.cooldown_exceptions, ecosystem="node", on=today,
+                        subject=node.lock.name)

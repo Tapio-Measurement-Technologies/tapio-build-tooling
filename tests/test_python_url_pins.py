@@ -25,6 +25,7 @@ from tapio_build_tools.ecosystems.python.sbom import (
     _validate_semantics,
     version_url_components,
 )
+from tests.audit_support import pip_audit
 
 WHEEL = "gadget_lib-0.1.0-py3-none-any.whl"
 URL = f"https://github.com/example-org/gadget-tools/releases/download/gadget-lib-v0.1.0/{WHEEL}"
@@ -272,9 +273,15 @@ lock = "requirements.txt"
     def test_it_is_named_as_not_audited_and_the_rest_is_audited_strictly(self, run) -> None:
         self.lock.write_text(LOCK, encoding="utf-8")
         given = {}
-        run.side_effect = lambda command, **_: given.update(
-            lock=Path(command[command.index("--requirement") + 1]).read_text(encoding="utf-8"),
-            command=command)
+        report = pip_audit({"name": "cryptography", "version": "50.0.1", "vulns": []})
+
+        def audited(command, **kwargs):
+            given.update(
+                lock=Path(command[command.index("--requirement") + 1]).read_text(encoding="utf-8"),
+                command=command)
+            return report(command, **kwargs)
+
+        run.side_effect = audited
 
         with patch("builtins.print") as printed:
             audit(self.config(), "runtime")
@@ -288,7 +295,9 @@ lock = "requirements.txt"
     @patch("tapio_build_tools.ecosystems.python.audit.subprocess.run")
     def test_a_lock_without_url_pins_is_audited_as_it_is(self, run) -> None:
         self.lock.write_text("packaging==26.2\n", encoding="utf-8")
-        audit(self.config(), "runtime")
+        run.side_effect = pip_audit({"name": "packaging", "version": "26.2", "vulns": []})
+        with patch("builtins.print"):
+            audit(self.config(), "runtime")
         command = run.call_args.args[0]
         self.assertEqual(command[command.index("--requirement") + 1], str(self.lock))
 
