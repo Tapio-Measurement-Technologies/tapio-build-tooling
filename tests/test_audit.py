@@ -147,6 +147,38 @@ class AuditTests(unittest.TestCase):
         self.assertIn("accepts PYSEC-2026-3447 for setuptools, which no finding matches",
                       stdout.getvalue())
 
+    def test_a_group_pinning_a_fixed_release_does_not_call_another_groups_entry_stale(self) -> None:
+        """runtime pins setuptools 79.0.1 under R-08; build pins the fixed 84.1.0."""
+        (self.root / "build.txt").write_text("setuptools==84.1.0\n", encoding="utf-8")
+        groups = '\n[[ecosystems.python.requirements]]\nname = "build"\nlock = "build.txt"\n'
+        (self.root / "build-tooling.toml").write_text(CONFIG + groups + ACCEPT_SETUPTOOLS,
+                                                       encoding="utf-8")
+        stdout = StringIO()
+        run = pip_audit(dependency("setuptools", "84.1.0"))
+        with patch("tapio_build_tools.ecosystems.python.audit.subprocess.run", side_effect=run), \
+                redirect_stdout(stdout):
+            audit(load_config(self.root), "build", today=TODAY)
+        output = stdout.getvalue()
+        self.assertNotIn("warning", output)
+        self.assertNotIn("remove the entry", output)
+        self.assertIn("not matched in requirement group 'build': ecosystems.python.accepted-risks[0] "
+                      "accepts PYSEC-2026-3447 for setuptools, which another group's lock also pins",
+                      output)
+
+    def test_with_several_groups_an_entry_for_a_package_no_lock_pins_is_stale(self) -> None:
+        (self.root / "dev.txt").write_text("pytest==9.0.0\n", encoding="utf-8")
+        (self.root / "requirements.txt").write_text("idna==3.10\n", encoding="utf-8")
+        groups = '\n[[ecosystems.python.requirements]]\nname = "dev"\nlock = "dev.txt"\n'
+        (self.root / "build-tooling.toml").write_text(CONFIG + groups + ACCEPT_SETUPTOOLS,
+                                                       encoding="utf-8")
+        stdout = StringIO()
+        run = pip_audit(dependency("pytest", "9.0.0"))
+        with patch("tapio_build_tools.ecosystems.python.audit.subprocess.run", side_effect=run), \
+                redirect_stdout(stdout):
+            audit(load_config(self.root), "dev", today=TODAY)
+        self.assertIn("accepts PYSEC-2026-3447 for setuptools, which no finding matches any more; "
+                      "remove the entry", stdout.getvalue())
+
     def test_pip_audit_failing_without_a_report_fails_the_audit(self) -> None:
         def run(command, **kwargs):
             return subprocess.CompletedProcess(command, 1)

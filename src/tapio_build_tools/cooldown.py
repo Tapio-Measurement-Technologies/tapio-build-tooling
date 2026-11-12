@@ -23,10 +23,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
-from packaging.version import InvalidVersion, Version
-
 from tapio_build_tools import risks
-from tapio_build_tools.config import CooldownException
+from tapio_build_tools.config import CooldownException, release_key
 
 
 class CooldownError(RuntimeError):
@@ -109,16 +107,6 @@ class Pinned:
     version: str = ""
 
 
-def release_key(package: str, version: str, ecosystem: str) -> tuple[str, object]:
-    """A release as *ecosystem* compares them: Python normalises both parts."""
-    if ecosystem == "python":
-        try:
-            return risks.package_key(package, ecosystem), Version(version)
-        except InvalidVersion:
-            pass
-    return risks.package_key(package, ecosystem), version
-
-
 def refuse_young(
     pinned: Iterable[Pinned],
     moment: datetime,
@@ -126,22 +114,23 @@ def refuse_young(
     *,
     ecosystem: str = "python",
     on: date | None = None,
-    packages: set[str] | None = None,
+    elsewhere: set[tuple[str, object]] | None = None,
     subject: str = "lock",
 ) -> list[Pinned]:
     """*pinned* as a list, or an error naming everything newer than *moment*.
 
     A young release a current entry in *exceptions* names is let through and
     printed with its reason. An entry that lets nothing through is flagged:
-    its release is older than the window, or not in the lock at all. With
-    *packages* - the package keys this lock pins, where several locks share
-    the entries - an entry for a package outside them is left to its own lock.
+    its release is older than the window, which is so for every lock, or no
+    lock pins it. *elsewhere* is the releases the other locks sharing the
+    entries pin, as release keys; an entry for one of those is that lock's
+    to judge, and is not flagged here.
     """
     releases = list(pinned)
     on = on or risks.today()
     by_key: dict[tuple[str, object], CooldownException] = {}
     for exception in exceptions:
-        by_key.setdefault(release_key(exception.package, exception.version, ecosystem), exception)
+        by_key.setdefault(exception.key, exception)
 
     young: list[Pinned] = []
     lapsed: dict[Pinned, CooldownException] = {}
@@ -168,13 +157,11 @@ def refuse_young(
         print(f"accepted inside the cooldown: {release.label} ({timestamp(release.published)}) - "
               f"{exception.source}: {exception.reason}")
     for exception in exceptions:
-        if exception in used:
+        if exception in used or (elsewhere is not None and exception.key in elsewhere):
             continue
-        key = release_key(exception.package, exception.version, ecosystem)
-        if packages is not None and key[0] not in packages:
-            continue
+        pinning = "the lock does not pin it" if elsewhere is None else "no group's lock pins it"
         risks.warn(f"{subject}: {exception.source} excepts {exception.label} from the cooldown, "
-                   f"and the lock does not pin it; remove the entry")
+                   f"and {pinning}; remove the entry")
     if young:
         named = ", ".join(
             f"{release.label} ({timestamp(release.published)})"

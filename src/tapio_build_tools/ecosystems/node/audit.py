@@ -15,6 +15,7 @@ import subprocess
 
 from tapio_build_tools import risks
 from tapio_build_tools.config import Config
+from tapio_build_tools.ecosystems.node.semver import satisfies
 
 
 class AuditError(RuntimeError):
@@ -36,6 +37,19 @@ def _versions(lock: dict, nodes: list) -> list[str]:
     return sorted(versions)
 
 
+def _in_range(installed: list[str], vulnerable: str) -> list[str]:
+    """The installed versions the advisory's range covers.
+
+    npm lists every installed copy of a vulnerable package, a patched one
+    beside an old one included. A version the range does not cover is left
+    out; one that cannot be checked against it is kept, and if that leaves
+    nothing, every installed version is - npm did find the package
+    vulnerable, so something it installs must be.
+    """
+    kept = [version for version in installed if satisfies(version, vulnerable) is not False]
+    return kept or installed
+
+
 def findings(report: dict, lock: dict) -> list[risks.Finding]:
     """Every advisory against a locked package in npm audit's JSON report.
 
@@ -55,7 +69,7 @@ def findings(report: dict, lock: dict) -> list[risks.Finding]:
         raise AuditError("npm audit's report has no vulnerabilities table")
     found: list[risks.Finding] = []
     for name, entry in vulnerabilities.items():
-        versions = _versions(lock, entry.get("nodes") or []) or ["(version not in lock)"]
+        installed = _versions(lock, entry.get("nodes") or []) or ["(version not in lock)"]
         for via in entry.get("via") or []:
             if not isinstance(via, dict):
                 continue
@@ -64,7 +78,7 @@ def findings(report: dict, lock: dict) -> list[risks.Finding]:
             # An advisory npm does not name by GitHub id cannot be accepted by
             # one: it is reported by its URL, and fails like any other.
             advisory = matched.group(1) if matched else (url or f"npm advisory {via.get('source')}")
-            for version in versions:
+            for version in _in_range(installed, str(via.get("range") or "*")):
                 found.append(risks.Finding(
                     package=str(via.get("name") or name),
                     version=version,

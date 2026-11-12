@@ -7,8 +7,7 @@ import os
 from pathlib import Path
 from urllib.parse import quote
 
-from tapio_build_tools import risks
-from tapio_build_tools.config import Config
+from tapio_build_tools.config import Config, release_key
 from tapio_build_tools.cooldown import (
     CooldownError,
     Pinned,
@@ -110,15 +109,18 @@ def check(
 ) -> list[Pinned]:
     """Every release the group's lock pins, or an error naming the young ones.
 
-    The ecosystem's cooldown exceptions let their releases through; with
-    several groups, an exception for a package this lock does not pin is left
-    to the group that does.
+    The ecosystem's cooldown exceptions let their releases through. With
+    several groups, an exception for a release another group's lock pins is
+    that group's to judge: only one no lock pins is flagged here.
     """
     python = config.require_python()
     group = python.requirement(group_name)
     locked = read_pins(group.lock)
-    packages = ({risks.package_key(pin.name, "python") for pin in locked}
-                if len(python.requirements) > 1 else None)
+    elsewhere = None
+    if len(python.requirements) > 1:
+        elsewhere = {release_key(pin.name, pin.version, "python")
+                     for other in python.requirements if other.name != group_name
+                     for pin in read_pins(other.lock)}
     return refuse_young(gather(_dated, locked), moment, python.cooldown_exceptions,
-                        ecosystem="python", on=today, packages=packages,
+                        ecosystem="python", on=today, elsewhere=elsewhere,
                         subject=f"requirement group {group_name!r}")

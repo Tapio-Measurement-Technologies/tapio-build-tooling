@@ -106,11 +106,19 @@ def audit(config: Config, group_name: str, *, today: date | None = None) -> None
     if completed.returncode != 0 and not found:
         raise AuditError(f"audit failed for requirement group {group_name!r}: pip-audit exited "
                          f"{completed.returncode} and reported no vulnerability")
-    # Every group's audit reads the ecosystem's entries; with more than one
-    # group, an entry for a package this lock does not pin is another's.
-    pinned = (audited | {risks.package_key(pin.name, "python") for pin in url_pins}
-              if len(python.requirements) > 1 else None)
-    assessment = risks.assess(found, python.accepted_risks, on=today or risks.today(), pinned=pinned)
+    # Every group's audit reads the ecosystem's entries. With more than one
+    # group, an entry is stale only if no other group's lock pins its package:
+    # this group pinning a fixed release says nothing about another's.
+    pinned = elsewhere = None
+    if len(python.requirements) > 1:
+        pinned = audited | {risks.package_key(pin.name, "python") for pin in url_pins}
+        try:
+            elsewhere = {pin.name for other in python.requirements if other.name != group_name
+                         for pin in read_pins(other.lock)}
+        except LockError as exc:
+            raise AuditError(str(exc)) from exc
+    assessment = risks.assess(found, python.accepted_risks, on=today or risks.today(),
+                              pinned=pinned, elsewhere=elsewhere)
     risks.report(assessment, subject=f"requirement group {group_name!r}")
 
     for pin in url_pins:

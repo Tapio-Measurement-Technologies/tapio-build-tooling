@@ -153,8 +153,9 @@ release still inside the window after its `review-by` fails again, and the
 error says the exception lapsed. Once the release is older than the window the
 entry does nothing; `cooldown` then flags it as a warning - an annotation in
 GitHub Actions - so it is removed, and does the same for an entry naming a
-release the lock does not pin. With several requirement groups, an entry for a
-package a group's lock does not pin at all is left to the group that does.
+release the lock does not pin. With several requirement groups, a group's
+check flags an entry only when no group's lock pins that release: a group
+pinning the package at another version leaves it to the group that pins it.
 
 For Python, `python requirements compile` also gives uv a cutoff of its own for
 each excepted package, `--exclude-newer-package <name>=<upload time + 1s>`,
@@ -162,9 +163,14 @@ looked up on PyPI. That keeps the excepted release satisfiable without
 admitting a still newer one, so `compile --check` passes and a later
 `compile --upgrade` keeps the fix instead of falling back below it. An
 exception whose release is past the window gets no such cutoff: the global one
-already allows it. The entries need `cooldown-days` in the same table; names
-are compared as the ecosystem compares them (PEP 503 names and PEP 440
-versions for Python, exactly for npm).
+already allows it. Nor does a package an input or lock requires by URL - a
+GitHub release wheel: uv takes a URL requirement as written and never holds it
+back by the cutoff, and PyPI does not know it to date it. With exceptions
+configured, `compile` and `compile --check` therefore need PyPI reachable,
+and fail naming the entry they could not date. The entries need
+`cooldown-days` in the same table; names are compared as the ecosystem
+compares them (PEP 503 names and PEP 440 versions for Python, exactly for
+npm).
 
 ## Accepted risks
 
@@ -214,7 +220,9 @@ would wave through everything under it unread, so `node audit` reads
 `npm audit --json`: each advisory there is named by its GitHub URL, which
 gives the GHSA id, and a package that is vulnerable only through a dependency
 carries no advisory of its own - accepting the dependency's covers both. An
-advisory npm gives no GHSA URL for cannot be accepted and always fails.
+advisory npm gives no GHSA URL for cannot be accepted and always fails. npm
+lists every installed copy of a vulnerable package; a copy outside the
+advisory's range is left out, and one whose range cannot be read is kept.
 
 ### Why per ecosystem
 
@@ -232,10 +240,12 @@ requirement group:
   shape both read, and the one a [scan of a container image](#container-images),
   which holds packages of both ecosystems and no groups at all, reuses.
 
-The cost is in telling a stale entry from another group's: with several
-groups, a group's audit skips entries for packages its lock does not pin, and
-an entry is flagged only by the audit of a lock that pins the package without
-the advisory.
+The cost is in telling a stale entry from another group's. Each audit sees one
+lock, and a group pinning a fixed release says nothing about a group that
+pins a vulnerable one. So with several groups an audit calls an entry stale
+only when no other group's lock pins its package; where another does, an
+entry this lock matches nothing for is printed as not matched in this group,
+not flagged for removal.
 
 ## Container images
 
