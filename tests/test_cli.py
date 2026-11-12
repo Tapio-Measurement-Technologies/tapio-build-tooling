@@ -90,6 +90,24 @@ lock = "package-lock.json"
             self.assertLess(moment, before - timedelta(days=30) + timedelta(minutes=5))
             self.assertGreater(moment, before - timedelta(days=30, minutes=5))
 
+    @patch("tapio_build_tools.cli.check_python_cooldown")
+    def test_a_passing_cooldown_check_counts_the_releases_it_excepted(self, check) -> None:
+        from tapio_build_tools.cooldown import Pinned
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_project(root)
+            now = datetime.now(timezone.utc)
+            check.return_value = [Pinned("certifi==2026.10.19", now, "certifi", "2026.10.19"),
+                                  Pinned("idna==3.10", now - timedelta(days=90), "idna", "3.10")]
+            stdout = StringIO()
+            with redirect_stdout(stdout):
+                result = main([
+                    "--project", str(root), "python", "cooldown", "--group", "runtime", "--days", "7",
+                ])
+            self.assertEqual(result, 0)
+            self.assertRegex(stdout.getvalue(), r"runtime: 2 release\(s\), none newer than \S+ other than 1 excepted")
+
     def test_a_cooldown_outside_the_supported_range_is_refused(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

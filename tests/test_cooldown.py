@@ -1,9 +1,14 @@
-from datetime import datetime, timedelta, timezone
+from contextlib import redirect_stdout
+from datetime import date, datetime, timedelta, timezone
+from io import StringIO
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
+
+from tapio_build_tools.config import CooldownException
 
 from tapio_build_tools.cooldown import (
     CooldownError,
@@ -44,6 +49,141 @@ class WindowTests(unittest.TestCase):
         self.assertNotIn("old==1", message)
         self.assertLess(message.index("fresh==3"), message.index("recent==2"))
         self.assertIn(timestamp(MOMENT - timedelta(days=7)), message)
+
+
+def exception(package: str, version: str, review_by: date | None = None, index: int = 0,
+              ecosystem: str = "node"):
+    return CooldownException(package, version, "Fixes an advisory.", review_by,
+                             f"ecosystems.{ecosystem}.cooldown-exceptions[{index}]", ecosystem)
+
+
+class CooldownExceptionTests(unittest.TestCase):
+    """A release taken inside the window on purpose, until it no longer needs to be."""
+
+    WINDOW = MOMENT - timedelta(days=7)
+    TODAY = date(2026, 9, 22)
+
+    def setUp(self) -> None:
+        environment = patch.dict(os.environ, {"GITHUB_ACTIONS": ""})
+        environment.start()
+        self.addCleanup(environment.stop)
+        self.old = Pinned("left-pad@1.3.0", MOMENT - timedelta(days=30), "left-pad", "1.3.0")
+        self.fix = Pinned("follow-redirects@1.16.3", MOMENT - timedelta(days=1),
+                          "follow-redirects", "1.16.3")
+
+    def screen(self, releases, exceptions, **options):
+        stdout = StringIO()
+        with redirect_stdout(stdout):
+            try:
+                return refuse_young(releases, self.WINDOW, exceptions, ecosystem="node",
+                                    on=options.pop("on", self.TODAY), subject="package-lock.json",
+                                    **options)
+            finally:
+                self.output = stdout.getvalue()
+
+    def test_an_excepted_young_release_passes_and_is_named_with_its_reason(self) -> None:
+        releases = self.screen([self.old, self.fix], [exception("follow-redirects", "1.16.3")])
+        self.assertEqual(releases, [self.old, self.fix])
+        self.assertIn("accepted inside the cooldown: follow-redirects@1.16.3 (2026-09-21T12:00:00Z) - "
+                      "ecosystems.node.cooldown-exceptions[0]: Fixes an advisory.", self.output)
+        self.assertNotIn("warning", self.output)
+
+    def test_an_exception_names_one_version_only(self) -> None:
+        with self.assertRaisesRegex(CooldownError, "follow-redirects@1.16.3"):
+            self.screen([self.fix], [exception("follow-redirects", "1.16.2")])
+        self.assertIn("excepts follow-redirects 1.16.2 from the cooldown, and the lock does not pin it",
+                      self.output)
+
+    def test_an_exception_past_its_review_by_date_lets_nothing_through(self) -> None:
+        dated = [exception("follow-redirects", "1.16.3", date(2026, 9, 21))]
+        with self.assertRaises(CooldownError) as caught:
+            self.screen([self.fix], dated)
+        self.assertIn("follow-redirects@1.16.3 (2026-09-21T12:00:00Z), whose exception in "
+                      "ecosystems.node.cooldown-exceptions[0] lapsed after 2026-09-21",
+                      str(caught.exception))
+        self.screen([self.fix], dated, on=date(2026, 9, 21))
+
+    def test_an_exception_for_a_release_older_than_the_window_is_flagged(self) -> None:
+        self.screen([self.old], [exception("left-pad", "1.3.0")])
+        self.assertIn("warning: package-lock.json: ecosystems.node.cooldown-exceptions[0] excepts "
+                      "left-pad 1.3.0 from the cooldown, and it was released 2026-08-23T12:00:00Z, "
+                      "before the window; remove the entry", self.output)
+
+    def test_python_releases_match_by_normalised_name_and_version(self) -> None:
+        pinned = Pinned("Zope.Interface==7.0", MOMENT - timedelta(days=1), "Zope.Interface", "7.0")
+        stdout = StringIO()
+        with redirect_stdout(stdout):
+            refuse_young([pinned], self.WINDOW,
+                         [exception("zope-interface", "7.0.0", ecosystem="python")],
+                         ecosystem="python", on=self.TODAY)
+        self.assertIn("accepted inside the cooldown: Zope.Interface==7.0", stdout.getvalue())
+
+    def test_an_exception_for_a_release_another_lock_pins_is_left_to_it(self) -> None:
+        # This lock pins left-pad at 1.3.0; another group pins the excepted 1.4.0.
+        self.screen([self.old], [exception("left-pad", "1.4.0")], elsewhere={("left-pad", "1.4.0")})
+        self.assertNotIn("warning", self.output)
+
+    def test_with_several_locks_an_exception_none_of_them_pins_is_flagged(self) -> None:
+        # Another group pinning the package at some other release is no reason to keep it.
+        self.screen([self.old], [exception("left-pad", "1.4.0")], elsewhere={("left-pad", "1.5.0")})
+        self.assertIn("excepts left-pad 1.4.0 from the cooldown, and no group's lock pins it; "
+                      "remove the entry", self.output)
+
+
+class PythonGroupExceptionTests(unittest.TestCase):
+    """Exceptions are shared by every requirement group; each group's check sees one lock."""
+
+    CONFIG = """schema-version = 1
+[organization]
+name = "Example"
+[products.demo]
+name = "Demo"
+[ecosystems.python]
+version = "3.12"
+cooldown-days = 7
+[[ecosystems.python.requirements]]
+name = "runtime"
+lock = "runtime.txt"
+[[ecosystems.python.requirements]]
+name = "build"
+lock = "build.txt"
+[[ecosystems.python.cooldown-exceptions]]
+package = "certifi"
+version = "2026.10.19"
+reason = "Fixes PYSEC-2026-4320."
+"""
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        (self.root / "build-tooling.toml").write_text(self.CONFIG, encoding="utf-8")
+        environment = patch.dict(os.environ, {"GITHUB_ACTIONS": ""})
+        environment.start()
+        self.addCleanup(environment.stop)
+
+    def check(self, runtime: str, build: str) -> str:
+        from tapio_build_tools.config import load_config
+
+        (self.root / "runtime.txt").write_text(runtime, encoding="utf-8")
+        (self.root / "build.txt").write_text(build, encoding="utf-8")
+        old = MOMENT - timedelta(days=60)
+        stdout = StringIO()
+        with patch.object(python_cooldown, "_dated",
+                          side_effect=lambda pin: Pinned(pin.label, old, pin.name, pin.version)), \
+                redirect_stdout(stdout):
+            python_cooldown.check(load_config(self.root), "build", MOMENT - timedelta(days=7),
+                                  today=date(2026, 9, 22))
+        return stdout.getvalue()
+
+    def test_a_group_pinning_another_release_leaves_the_exception_to_the_group_that_pins_it(self) -> None:
+        output = self.check("certifi==2026.10.19\n", "certifi==2026.7.22\n")
+        self.assertNotIn("warning", output)
+
+    def test_an_exception_no_group_pins_is_flagged(self) -> None:
+        output = self.check("certifi==2026.11.1\n", "certifi==2026.7.22\n")
+        self.assertIn("excepts certifi 2026.10.19 from the cooldown, and no group's lock pins it; "
+                      "remove the entry", output)
 
 
 LOCK = """\
@@ -187,6 +327,8 @@ class NodeDateTests(unittest.TestCase):
         }
         dated = node_cooldown._dated(("left-pad", {"1.3.0", "1.2.0"}))
         self.assertEqual(fetch_json.call_count, 1)
+        self.assertEqual([(release.package, release.version) for release in dated],
+                         [("left-pad", "1.2.0"), ("left-pad", "1.3.0")])
         self.assertEqual(
             [(release.label, timestamp(release.published)) for release in dated],
             [("left-pad@1.2.0", "2015-01-01T00:00:00Z"), ("left-pad@1.3.0", "2018-02-01T00:00:00Z")],

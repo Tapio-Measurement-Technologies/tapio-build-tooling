@@ -1,6 +1,9 @@
+from datetime import date
 from pathlib import Path
 import tempfile
 import unittest
+
+from packaging.version import Version
 
 from tapio_build_tools.config import ConfigError, load_config
 
@@ -211,6 +214,133 @@ lock = "nested/package-lock.json"
         (self.root / "build-tooling.toml").write_text(text, encoding="utf-8")
         with self.assertRaisesRegex(ConfigError, "share a directory"):
             load_config(self.root)
+
+
+RISK = """
+[[ecosystems.python.accepted-risks]]
+id = "GHSA-h35f-9h28-mq5c"
+package = "setuptools"
+reason = "Held below 80 by zappa; see R-08."
+review-by = 2027-01-31
+"""
+
+EXCEPTION = """
+[[ecosystems.python.cooldown-exceptions]]
+package = "certifi"
+version = "2026.10.19"
+reason = "Fixes PYSEC-2026-4320."
+"""
+
+NODE = """
+[ecosystems.node]
+version = "24"
+package = "package.json"
+lock = "package-lock.json"
+cooldown-days = 7
+"""
+
+
+class AcceptedRiskConfigTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        for name, text in [("requirements.in", "packaging==26.2\n"),
+                           ("requirements.txt", "packaging==26.2\n"),
+                           ("package.json", "{}\n"), ("package-lock.json", "{}\n")]:
+            (self.root / name).write_text(text, encoding="utf-8")
+
+    def load(self, text: str):
+        (self.root / "build-tooling.toml").write_text(text, encoding="utf-8")
+        return load_config(self.root)
+
+    def test_reads_accepted_risks_with_their_review_dates(self) -> None:
+        text = BASE + RISK + RISK.replace("GHSA-h35f-9h28-mq5c", "PYSEC-2026-3447").replace(
+            "2027-01-31", '"2027-02-28"')
+        risks = self.load(text).python.accepted_risks
+        self.assertEqual([risk.id for risk in risks], ["GHSA-h35f-9h28-mq5c", "PYSEC-2026-3447"])
+        self.assertEqual(risks[0].review_by, date(2027, 1, 31))
+        self.assertEqual(risks[1].review_by, date(2027, 2, 28))
+        self.assertEqual(risks[0].source, "ecosystems.python.accepted-risks[0]")
+        self.assertEqual(risks[0].ecosystem, "python")
+        self.assertTrue(risks[0].active(date(2027, 1, 31)))
+        self.assertFalse(risks[0].active(date(2027, 2, 1)))
+
+    def test_without_entries_nothing_is_accepted(self) -> None:
+        python = self.load(BASE).python
+        self.assertEqual(python.accepted_risks, ())
+        self.assertEqual(python.cooldown_exceptions, ())
+
+    def test_rejects_an_accepted_risk_that_does_not_say_enough(self) -> None:
+        cases = [
+            ('reason = "Held below 80 by zappa; see R-08."\n', "", "reason must be a non-empty string"),
+            ('reason = "Held below 80 by zappa; see R-08."', 'reason = "  "', "reason must be a non-empty"),
+            ("review-by = 2027-01-31\n", "", "review-by is required"),
+            ("review-by = 2027-01-31", "review-by = 2027-01-31T12:00:00", "must be a date"),
+            ("review-by = 2027-01-31", 'review-by = "soon"', "must be a date"),
+            ('package = "setuptools"\n', "", "package must be a non-empty string"),
+            ('package = "setuptools"', 'package = "not a name"', "not a Python package name"),
+            ('id = "GHSA-h35f-9h28-mq5c"', 'id = "R-08"', "not a PYSEC or GHSA or CVE id"),
+            ('id = "GHSA-h35f-9h28-mq5c"', 'id = "GHSA-H35F-9H28-MQ5C"', "not a PYSEC or GHSA or CVE id"),
+            ("review-by = 2027-01-31", 'review-by = 2027-01-31\nseverity = "low"', "unknown"),
+        ]
+        for old, new, message in cases:
+            with self.subTest(message=message, new=new):
+                with self.assertRaisesRegex(ConfigError, message):
+                    self.load(BASE + RISK.replace(old, new))
+
+    def test_rejects_the_same_advisory_accepted_twice_for_one_package(self) -> None:
+        with self.assertRaisesRegex(ConfigError, "accepts GHSA-h35f-9h28-mq5c for SetupTools again"):
+            self.load(BASE + RISK + RISK.replace('"setuptools"', '"SetupTools"'))
+
+    def test_npm_audit_names_github_advisories_only(self) -> None:
+        node_risk = RISK.replace("ecosystems.python", "ecosystems.node").replace(
+            '"setuptools"', '"deepmerge"')
+        config = self.load(BASE + NODE + node_risk)
+        self.assertEqual(config.node.accepted_risks[0].ecosystem, "node")
+        with self.assertRaisesRegex(ConfigError, "not a GHSA id: CVE-2026-1234; npm audit reports"):
+            self.load(BASE + NODE + node_risk.replace("GHSA-h35f-9h28-mq5c", "CVE-2026-1234"))
+        with self.assertRaisesRegex(ConfigError, "not an npm package name"):
+            self.load(BASE + NODE + node_risk.replace('"deepmerge"', '"Deep Merge"'))
+
+    def test_reads_cooldown_exceptions(self) -> None:
+        text = BASE.replace('version = "3.12"', 'version = "3.12"\ncooldown-days = 7') + EXCEPTION
+        [exception] = self.load(text).python.cooldown_exceptions
+        self.assertEqual(exception.label, "certifi 2026.10.19")
+        self.assertEqual(exception.key, ("certifi", Version("2026.10.19.0")))
+        self.assertIsNone(exception.review_by)
+        self.assertTrue(exception.active(date(2099, 1, 1)))
+        dated = self.load(text + 'review-by = 2026-11-30\n').python.cooldown_exceptions[0]
+        self.assertEqual(dated.review_by, date(2026, 11, 30))
+        self.assertFalse(dated.active(date(2026, 12, 1)))
+
+    def test_rejects_cooldown_exceptions_that_do_not_say_enough(self) -> None:
+        with_cooldown = BASE.replace('version = "3.12"', 'version = "3.12"\ncooldown-days = 7')
+        cases = [
+            (BASE + EXCEPTION, "cooldown-exceptions needs ecosystems.python.cooldown-days"),
+            (with_cooldown + EXCEPTION.replace('reason = "Fixes PYSEC-2026-4320."\n', ""),
+             "reason must be a non-empty string"),
+            (with_cooldown + EXCEPTION.replace('version = "2026.10.19"\n', ""),
+             "version must be a non-empty string"),
+            (with_cooldown + EXCEPTION.replace('"2026.10.19"', '"latest"'), "not a Python version"),
+            (with_cooldown + EXCEPTION + EXCEPTION.replace('"2026.10.19"', '"2026.10.19.0"'),
+             "excepts certifi 2026.10.19.0 again"),
+            (with_cooldown + EXCEPTION + "review-by = 2026\n", "must be a date"),
+            (BASE + NODE + EXCEPTION.replace("ecosystems.python", "ecosystems.node").replace(
+                '"certifi"', '"follow-redirects"').replace('"2026.10.19"', '"latest"'),
+             "not an npm version"),
+        ]
+        for text, message in cases:
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(ConfigError, message):
+                    self.load(text)
+
+    def test_node_reads_cooldown_exceptions_by_exact_version(self) -> None:
+        text = BASE + NODE + EXCEPTION.replace("ecosystems.python", "ecosystems.node").replace(
+            '"certifi"', '"follow-redirects"').replace('"2026.10.19"', '"1.16.3"')
+        [exception] = self.load(text).node.cooldown_exceptions
+        self.assertEqual(exception.label, "follow-redirects 1.16.3")
+        self.assertEqual(exception.source, "ecosystems.node.cooldown-exceptions[0]")
 
 
 if __name__ == "__main__":

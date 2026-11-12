@@ -48,7 +48,8 @@ tapio-build --project . node sbom --product PRODUCT --output sbom.cdx.json
 ```
 
 Node evidence uses `package-lock.json` without omitting development or optional
-dependencies. `npm audit` fails on any reported vulnerability.
+dependencies. `node audit` fails on any reported vulnerability, whatever its
+severity, that is not an [accepted risk](#accepted-risks).
 
 ## Release cooldown
 
@@ -83,6 +84,10 @@ the decision in the commit that made it:
 ```bash
 tapio-build --project . python requirements compile --upgrade --no-cooldown
 ```
+
+Until that release is older than the window, though, uv's cutoff leaves it
+unsatisfiable, so `compile --check` and `cooldown` both refuse the lock. Name
+it as a [cooldown exception](#cooldown-exceptions) to keep both passing.
 
 **Once a lock is written.** The `cooldown` commands read the lock itself and
 ask the index when each release in it appeared:
@@ -122,6 +127,124 @@ cannot audit. The SBOM gives the wheel the version and hash the lock pins.
 
 `audit` still fails on a known vulnerability inside the window, so a cooldown
 delays a fix rather than hiding the need for one.
+
+### Cooldown exceptions
+
+A release taken inside the window on purpose is named, with the reason, in the
+ecosystem it belongs to:
+
+```toml
+[[ecosystems.node.cooldown-exceptions]]
+package = "follow-redirects"
+version = "1.16.3"                 # this release only; a later one waits as usual
+reason = "Fixes GHSA-xxxx-xxxx-xxxx in 1.16.2; taken 2026-11-11 with npm install."
+review-by = 2026-11-30             # optional: stop excepting it after this date
+
+[[ecosystems.python.cooldown-exceptions]]
+package = "certifi"
+version = "2026.10.19"
+reason = "Fixes PYSEC-2026-4320; taken with compile --no-cooldown."
+```
+
+`cooldown` lets the release through, printing it with its reason, for as long
+as it is younger than the window and, with a `review-by`, through that date. A
+release still inside the window after its `review-by` fails again, and the
+error says the exception lapsed. Once the release is older than the window the
+entry does nothing; `cooldown` then flags it as a warning - an annotation in
+GitHub Actions - so it is removed, and does the same for an entry naming a
+release the lock does not pin. With several requirement groups, a group's
+check flags an entry only when no group's lock pins that release: a group
+pinning the package at another version leaves it to the group that pins it.
+
+For Python, `python requirements compile` also gives uv a cutoff of its own for
+each excepted package, `--exclude-newer-package <name>=<upload time + 1s>`,
+looked up on PyPI. That keeps the excepted release satisfiable without
+admitting a still newer one, so `compile --check` passes and a later
+`compile --upgrade` keeps the fix instead of falling back below it. An
+exception whose release is past the window gets no such cutoff: the global one
+already allows it. Nor does a package an input or lock requires by URL - a
+GitHub release wheel: uv takes a URL requirement as written and never holds it
+back by the cutoff, and PyPI does not know it to date it. With exceptions
+configured, `compile` and `compile --check` therefore need PyPI reachable,
+and fail naming the entry they could not date. The entries need
+`cooldown-days` in the same table; names are compared as the ecosystem
+compares them (PEP 503 names and PEP 440 versions for Python, exactly for
+npm).
+
+## Accepted risks
+
+An advisory a product carries on purpose - a fix it cannot take yet, a
+vulnerability its use never reaches - is recorded beside the ecosystem's
+other settings, with the package it applies to, why it is accepted, and when
+that is to be looked at again:
+
+```toml
+[[ecosystems.python.accepted-risks]]
+id = "GHSA-h35f-9h28-mq5c"         # PYSEC-, GHSA- or CVE- id
+package = "setuptools"
+reason = "zappa 0.60.2 pins setuptools<80; used at build time only. Risk R-08."
+review-by = 2027-01-31             # a TOML date, or "2027-01-31"
+
+[[ecosystems.node.accepted-risks]]
+id = "GHSA-gcqx-w48m-w2h4"         # GHSA only: npm audit names nothing else
+package = "deepmerge"
+reason = "Pulled in by react-data-table-component 7.x; merges our own column config only."
+review-by = 2027-03-31
+```
+
+`python audit` and `node audit` then:
+
+- accept a finding when an entry names its package and one of its ids - for
+  Python the advisory's own id or any alias pip-audit gives it, so a CVE id
+  covers the PYSEC and GHSA records of the same vulnerability;
+- print every finding with how it was judged: `accepted` with the entry and
+  its reason, `vulnerable`, or `no longer accepted`;
+- fail on any finding no entry accepts, and on any whose entries are past
+  their `review-by` - an entry applies through that date, not after it, and
+  the error names the entry and the date;
+- flag, as a warning annotation in GitHub Actions, every entry that matches no
+  finding, so a fixed or withdrawn advisory's entry is removed rather than
+  left to accept something nobody has looked at.
+
+`id`, `package`, a non-empty `reason` and `review-by` are all required; the
+same id for the same package twice is an error. Python package names are
+compared as PEP 503 normalises them.
+
+pip-audit's own `--ignore-vuln` is not used: it drops an id from every package
+and does not say what it dropped, so it could neither tie an entry to its
+package nor tell a stale entry from a used one. `python audit` reads
+pip-audit's JSON report (`--format json --aliases on`) and applies the entries
+itself. npm audit has no per-advisory ignore at all, and its severity floor
+would wave through everything under it unread, so `node audit` reads
+`npm audit --json`: each advisory there is named by its GitHub URL, which
+gives the GHSA id, and a package that is vulnerable only through a dependency
+carries no advisory of its own - accepting the dependency's covers both. An
+advisory npm gives no GHSA URL for cannot be accepted and always fails. npm
+lists every installed copy of a vulnerable package; a copy outside the
+advisory's range is left out, and one whose range cannot be read is kept.
+
+### Why per ecosystem
+
+Entries sit in `[ecosystems.python]` and `[ecosystems.node]`, not in each
+requirement group:
+
+- An acceptance is a judgement about a package release - the risk analysis
+  names the package and the advisory - not about which lock happens to pin
+  it. A package pinned in two groups carries the same risk in both, and one
+  entry per group would be copies free to drift apart, with different reasons
+  and review dates for the same thing.
+- An entry names its package, so sharing it across groups cannot accept an
+  advisory in some other package.
+- Groups are a Python notion; npm has one lock. Per ecosystem is the one
+  shape both read, and the one a scan of a container image - which holds
+  packages of both ecosystems and no groups at all - can reuse.
+
+The cost is in telling a stale entry from another group's. Each audit sees one
+lock, and a group pinning a fixed release says nothing about a group that
+pins a vulnerable one. So with several groups an audit calls an entry stale
+only when no other group's lock pins its package; where another does, an
+entry this lock matches nothing for is printed as not matched in this group,
+not flagged for removal.
 
 ## GitHub Actions
 
