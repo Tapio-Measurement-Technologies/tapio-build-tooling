@@ -38,6 +38,11 @@ ADVISORY_IDS = {
 # npm audit names an advisory by its GitHub URL alone, so GHSA is all it can match.
 NODE_ADVISORY_IDS = ("GHSA",)
 PYTHON_ADVISORY_IDS = ("PYSEC", "GHSA", "CVE")
+# grype names a finding by CVE, GHSA or a distribution's advisory, and lists
+# the CVEs behind the last; PYSEC ids are not in its database.
+CONTAINER_ADVISORY_IDS = ("CVE", "GHSA")
+# grype's severities, lowest first.
+SEVERITIES = ("negligible", "low", "medium", "high", "critical")
 
 
 @dataclass(frozen=True)
@@ -78,7 +83,7 @@ class AcceptedRisk:
 
     *source* says where the entry is configured, so that a message about it
     points at the line to change. *ecosystem* is the table it came from:
-    "python" or "node".
+    "python", "node", or "container" for any package in an image.
     """
 
     id: str
@@ -160,6 +165,19 @@ class NodeEcosystem:
 
 
 @dataclass(frozen=True)
+class Container:
+    """How an image scan judges what it finds.
+
+    It fails on a finding at or above *fail_on* with a fix available, unless
+    an accepted risk covers it: one of these, or, for a Python or npm package
+    in the image, one of that ecosystem's.
+    """
+
+    fail_on: str = "high"
+    accepted_risks: tuple[AcceptedRisk, ...] = ()
+
+
+@dataclass(frozen=True)
 class DownloadAsset:
     """One downloadable build of a program: where the build leaves it, and for what."""
 
@@ -236,6 +254,7 @@ class Config:
     node: NodeEcosystem | None
     downloads: Downloads | None = None
     archive: Archive | None = None
+    container: Container | None = None
 
     def require_python(self) -> PythonEcosystem:
         if self.python is None:
@@ -328,7 +347,8 @@ def load_config(
 
     _keys(
         data,
-        {"schema-version", "organization", "products", "ecosystems", "downloads", "archive"},
+        {"schema-version", "organization", "products", "ecosystems", "downloads", "archive",
+         "container"},
         "top-level",
     )
     if data.get("schema-version") != 1:
@@ -370,10 +390,11 @@ def load_config(
         )
 
     # A firmware repository has no package ecosystem to lock or audit; its
-    # archive is reason enough for a configuration.
-    ecosystems_data = _table(data.get("ecosystems", {} if "archive" in data else None), "ecosystems")
+    # archive is reason enough for a configuration, as an image to scan is.
+    standalone = "archive" in data or "container" in data
+    ecosystems_data = _table(data.get("ecosystems", {} if standalone else None), "ecosystems")
     _keys(ecosystems_data, {"python", "node"}, "ecosystems")
-    if not ecosystems_data and "archive" not in data:
+    if not ecosystems_data and not standalone:
         raise ConfigError("at least one ecosystem must be configured")
 
     python: PythonEcosystem | None = None
@@ -477,6 +498,10 @@ def load_config(
     if "archive" in data:
         archive = _load_archive(project_root, data["archive"], products)
 
+    container: Container | None = None
+    if "container" in data:
+        container = _load_container(data["container"])
+
     return Config(
         project=project_root,
         path=path,
@@ -486,6 +511,7 @@ def load_config(
         node=node,
         downloads=downloads,
         archive=archive,
+        container=container,
     )
 
 
@@ -535,6 +561,13 @@ def _node_package(value: str, label: str) -> str:
     return value
 
 
+def _image_package(value: str, label: str) -> str:
+    """Any package an image may hold - rpm, deb, apk, a language's - by its name."""
+    if not re.match(r"^\S+$", value):
+        raise ConfigError(f"{label}.package is not a package name: {value}")
+    return value
+
+
 def _node_version(value: str, label: str) -> str:
     if not re.match(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.+-]+)?$", value):
         raise ConfigError(f"{label}.version is not an npm version: {value}")
@@ -565,7 +598,9 @@ def _accepted_risks(
         if not any(ADVISORY_IDS[kind].match(advisory) for kind in allowed):
             raise ConfigError(
                 f"{entry_label}.id is not a {' or '.join(allowed)} id: {advisory}"
-                + ("; npm audit reports GitHub advisories only" if allowed == NODE_ADVISORY_IDS else "")
+                + {NODE_ADVISORY_IDS: "; npm audit reports GitHub advisories only",
+                   CONTAINER_ADVISORY_IDS: "; grype names advisories by CVE or GHSA, "
+                                           "never PYSEC"}.get(allowed, "")
             )
         package = _required_string(entry, "package", entry_label).strip()
         key = (advisory, package_name(package, entry_label))
@@ -801,3 +836,15 @@ def _load_archive(project: Path, raw: Any, products: dict[str, Product]) -> Arch
         _project_path(project, value, f"{label}.files[{index}]", must_exist=False)
         files.append(value)
     return Archive(product=product, slug=slug, zip=zip_name, files=tuple(files))
+
+
+def _load_container(raw: Any) -> Container:
+    label = "container"
+    data = _table(raw, label)
+    _keys(data, {"fail-on", "accepted-risks"}, label)
+    return Container(
+        fail_on=_choice(data, "fail-on", label, SEVERITIES, "high"),
+        accepted_risks=_accepted_risks(
+            data, label, "container", CONTAINER_ADVISORY_IDS, _image_package
+        ),
+    )

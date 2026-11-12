@@ -1,0 +1,42 @@
+schema-version = 1
+
+[organization]
+name = "Example Oy"
+
+# A backend shipped as an AWS Lambda container image. The registry's basic
+# scan reads the image's operating-system packages once, at push; the
+# container action scans every build, its Python packages included.
+[products.example-backend]
+name = "Example Backend"
+license-name = "Proprietary"
+
+# The function's dependencies, which the image installs from this lock.
+[ecosystems.python]
+version = "3.12"
+cooldown-days = 7
+
+[[ecosystems.python.requirements]]
+name = "runtime"
+input = "requirements.in"
+lock = "requirements.txt"
+
+# Read by python audit for the lock, and by container scan for the same
+# package in the image. grype names Python advisories by GHSA and CVE, not
+# PYSEC, so an entry the image scan should honour uses one of those.
+[[ecosystems.python.accepted-risks]]
+id = "GHSA-h35f-9h28-mq5c"
+package = "setuptools"
+reason = "A deployment tool pins setuptools<80; it is used at build time only. See the risk analysis, R-08."
+review-by = 2027-01-31
+
+[container]
+# Fail on a finding at or above this severity that has a fix available.
+fail-on = "high"
+
+# A base-image package only the image scan sees, accepted by the CVE behind
+# the distribution's advisory: grype lists those CVEs beside the advisory id.
+[[container.accepted-risks]]
+id = "CVE-2026-12345"
+package = "openssl-libs"
+reason = "Placeholder: the base image's fix is not released yet, and the function terminates no TLS itself."
+review-by = 2026-12-31

@@ -13,7 +13,11 @@ import tempfile
 from tapio_build_tools.archive import ArchiveError
 from tapio_build_tools.archive.publish import names as archive_names
 from tapio_build_tools.archive.publish import publish_archive
-from tapio_build_tools.config import ConfigError, load_config
+from tapio_build_tools.config import SEVERITIES, ConfigError, load_config
+from tapio_build_tools.container import ContainerError
+from tapio_build_tools.container.scan import generate_sbom as generate_image_sbom
+from tapio_build_tools.container.scan import scan as scan_image
+from tapio_build_tools.container.tools import TOOLS, default_directory, install
 from tapio_build_tools.cooldown import CooldownError, Pinned, cutoff, timestamp
 from tapio_build_tools.downloads import DownloadsError
 from tapio_build_tools.downloads.publish import (
@@ -104,6 +108,30 @@ def build_parser() -> argparse.ArgumentParser:
     node_sbom.add_argument("--commit-sha", help="source commit SHA")
     node_sbom.add_argument("--platform", dest="build_platform", help="target platform")
     node_sbom.add_argument("--build-timestamp", help="UTC evidence timestamp")
+
+    container = commands.add_parser("container", help="container image SBOM and vulnerability scan")
+    container_commands = container.add_subparsers(dest="container_command", required=True)
+    tools_help = "where syft and grype are kept; under $RUNNER_TEMP, or a user cache, by default"
+    container_tools = container_commands.add_parser(
+        "tools", help="download syft and grype at their pinned versions and check their digests")
+    container_tools.add_argument("--tools", type=Path, help=tools_help)
+    image_sbom = container_commands.add_parser(
+        "sbom", help="write a CycloneDX SBOM of an image in the local Docker daemon")
+    image_sbom.add_argument("--image", required=True, help="image reference, as the job built it")
+    image_sbom.add_argument("--output", required=True, type=Path, help="output CycloneDX JSON path")
+    image_sbom.add_argument("--syft-output", type=Path,
+                            help="syft's own JSON, which scan reads; beside --output by default")
+    image_sbom.add_argument("--product", help="configured product ID, named as the SBOM's subject")
+    image_sbom.add_argument("--version", help="the image's version, recorded in the SBOM")
+    image_sbom.add_argument("--tools", type=Path, help=tools_help)
+    image_scan = container_commands.add_parser(
+        "scan", help="scan an image's syft JSON with grype and fail on fixable findings")
+    image_scan.add_argument("--sbom", required=True, type=Path, help="syft JSON that sbom wrote")
+    image_scan.add_argument("--report", required=True, type=Path, help="grype JSON report to write")
+    image_scan.add_argument("--fail-on", choices=SEVERITIES,
+                            help="lowest severity that fails; container.fail-on, or high, by default")
+    image_scan.add_argument("--image", help="the image's name in messages")
+    image_scan.add_argument("--tools", type=Path, help=tools_help)
 
     downloads = commands.add_parser("downloads", help="release download site operations")
     downloads_commands = downloads.add_subparsers(dest="downloads_command", required=True)
@@ -381,6 +409,33 @@ def main(argv: list[str] | None = None) -> int:
             )
             print(f"Generated CycloneDX SBOM: {output}")
             return 0
+        if args.command == "container" and args.container_command == "tools":
+            for tool in TOOLS:
+                print(f"{tool.name} {tool.version}: {install(tool, args.tools or default_directory())}")
+            return 0
+        if args.command == "container" and args.container_command == "sbom":
+            output, syft_output = generate_image_sbom(
+                config,
+                image=args.image,
+                output=args.output,
+                syft_output=args.syft_output,
+                product_id=args.product,
+                version=args.version,
+                tools=args.tools or default_directory(),
+            )
+            print(f"Generated CycloneDX SBOM: {output}")
+            print(f"syft JSON for the scan: {syft_output}")
+            return 0
+        if args.command == "container" and args.container_command == "scan":
+            scan_image(
+                config,
+                sbom=args.sbom,
+                report=args.report,
+                tools=args.tools or default_directory(),
+                fail_on=args.fail_on,
+                subject=args.image or "image",
+            )
+            return 0
         if args.command == "downloads" and args.downloads_command == "publish":
             if not args.version:
                 parser.error("--version is required outside GitHub Actions")
@@ -472,6 +527,7 @@ def main(argv: list[str] | None = None) -> int:
         ArchiveError,
         AuditError,
         ConfigError,
+        ContainerError,
         CooldownError,
         DownloadsError,
         NodeAuditError,
