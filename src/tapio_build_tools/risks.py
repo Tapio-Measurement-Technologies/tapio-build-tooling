@@ -17,7 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 import os
-from typing import Iterable
+from typing import Callable, Iterable
 
 from tapio_build_tools.config import AcceptedRisk, package_key
 
@@ -94,6 +94,9 @@ class Assessment:
     # Entries this lock matches nothing for, whose package another lock also
     # pins: that lock may need them, so they are not called stale here.
     unmatched: tuple[AcceptedRisk, ...] = ()
+    # Findings no current entry accepts that do not fail the audit anyway -
+    # below an image scan's threshold, say.
+    passed: tuple[Finding, ...] = ()
 
     @property
     def failed(self) -> bool:
@@ -117,8 +120,14 @@ def assess(
     on: date,
     pinned: set[str] | None = None,
     elsewhere: set[str] | None = None,
+    fails: Callable[[Finding], bool] = lambda finding: True,
+    judges: Callable[[AcceptedRisk], bool] = lambda risk: True,
 ) -> Assessment:
     """Sort *findings* by whether an entry in *risks* accepts them *on* that date.
+
+    A finding no current entry accepts fails if *fails* says so, and passes
+    otherwise. Only entries *judges* picks are called stale or unmatched; the
+    rest are another check's to judge.
 
     Where several locks share the entries, *pinned* is the package keys the
     audited lock holds and *elsewhere* those the other locks hold. An entry
@@ -133,12 +142,15 @@ def assess(
     accepted: list[tuple[Finding, AcceptedRisk]] = []
     expired: list[tuple[Finding, AcceptedRisk]] = []
     unaccepted: list[Finding] = []
+    passed: list[Finding] = []
     for finding in sorted(set(findings), key=lambda item: (item.key, item.version, item.id)):
         matching = [risk for risk in risks if matches(risk, finding)]
         used.update(matching)
         current = [risk for risk in matching if risk.active(on)]
         if current:
             accepted.append((finding, current[0]))
+        elif not fails(finding):
+            passed.append(finding)
         elif matching:
             expired.append((finding, matching[0]))
         else:
@@ -146,7 +158,7 @@ def assess(
     stale: list[AcceptedRisk] = []
     unmatched: list[AcceptedRisk] = []
     for risk in risks:
-        if risk in used:
+        if risk in used or not judges(risk):
             continue
         key = package_key(risk.package, risk.ecosystem)
         if pinned is None or key not in (elsewhere or set()):
@@ -154,7 +166,7 @@ def assess(
         elif key in pinned:
             unmatched.append(risk)
     return Assessment(tuple(accepted), tuple(expired), tuple(unaccepted), tuple(stale),
-                      tuple(unmatched))
+                      tuple(unmatched), tuple(passed))
 
 
 def warn(message: str) -> None:

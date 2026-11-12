@@ -33,7 +33,9 @@ from tapio_build_tools.container import ContainerError
 USER_AGENT = "tapio-build-tooling"
 TIMEOUT_SECONDS = 120
 CHUNK = 1 << 20
-# Larger than either binary, so a tampered archive cannot fill the disk.
+# Several times what either tool weighs, as a stop for a download or an
+# archive member that keeps going: the digest is only checked at the end.
+MAXIMUM_ARCHIVE_BYTES = 256 << 20
 MAXIMUM_BINARY_BYTES = 512 << 20
 
 
@@ -121,12 +123,21 @@ def sha256_of(path: Path) -> str:
     return digest.hexdigest()
 
 
-def download(url: str, destination: BinaryIO) -> None:
-    """Write what *url* serves into *destination*; GitHub redirects to its asset host."""
+def download(url: str, destination: BinaryIO, *, limit: int = MAXIMUM_ARCHIVE_BYTES) -> None:
+    """Write what *url* serves into *destination*, stopping past *limit* bytes.
+
+    GitHub redirects a release asset to its asset host. Nothing about the
+    response is trusted until the caller checks the digest, so its size is
+    capped here, before that.
+    """
     request = Request(url, headers={"User-Agent": USER_AGENT})
     try:
         with urlopen(request, timeout=TIMEOUT_SECONDS) as response:
+            written = 0
             for chunk in iter(lambda: response.read(CHUNK), b""):
+                written += len(chunk)
+                if written > limit:
+                    raise ContainerError(f"{url} is larger than {limit} bytes; stopped")
                 destination.write(chunk)
     except (URLError, OSError) as exc:
         raise ContainerError(f"downloading {url} failed: {exc}") from exc

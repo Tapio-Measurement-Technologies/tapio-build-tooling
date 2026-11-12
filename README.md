@@ -294,9 +294,13 @@ accepted for the lock is accepted for the image without a second entry. An id
 matches grype's id for the finding or any related vulnerability it lists, so a
 CVE covers a distribution advisory (`ALAS2023-…`, `DSA-…`) raised for it.
 grype names Python advisories by GHSA and CVE, never PYSEC: an ecosystem
-entry the image scan should honour uses one of those. Only container entries
-are flagged when they match nothing; an ecosystem's are its own audit's to
-flag. `--fail-on` overrides the configured threshold.
+entry the image scan should honour uses one of those. A Python entry by PYSEC
+id is named in a warning when the image holds a finding on its package that
+no entry accepts, which is when it may have been meant to. Only container
+entries are flagged when they match nothing; an ecosystem's are its own
+audit's to flag. `--fail-on` overrides the configured threshold. The summary
+line counts the findings that gate - at or above the threshold with a fix -
+apart from those that pass anyway, each with how many were accepted.
 
 ### Why grype
 
@@ -314,8 +318,9 @@ pinning covers both.
 
 `container tools` downloads each scanner's release archive from its GitHub
 release at the version `src/tapio_build_tools/container/tools.py` pins,
-checks the archive against its pinned SHA-256, extracts the one binary, and
-checks that against its own pinned SHA-256. `sbom` and `scan` install the same
+checks the archive against its pinned SHA-256 - stopping a download past
+256 MiB before that - extracts the one binary, and checks that against its
+own pinned SHA-256. `sbom` and `scan` install the same
 way if needed, and check the binary's digest again every time before they run
 it. A mismatch is an error and leaves nothing behind. Builds are pinned for
 Linux x86_64 and aarch64, the GitHub-hosted runners; nothing is fetched by a

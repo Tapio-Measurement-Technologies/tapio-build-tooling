@@ -132,6 +132,24 @@ def matches(report: dict) -> list[Match]:
     return [Match(finding, fixable) for finding, fixable in found.items()]
 
 
+def _warn_pysec(assessment: risks.Assessment, python_risks, subject: str) -> None:
+    """Warn of a Python entry by PYSEC id where the image holds what it may be meant for.
+
+    grype has no PYSEC ids, so such an entry accepts nothing in an image. It
+    is named when the image holds a finding on its package that no entry
+    accepts; where GHSA or CVE entries accept every finding on the package,
+    the PYSEC one is the lock audit's alone and says nothing here.
+    """
+    unaccepted = {finding.key for finding in (*assessment.open, *assessment.passed,
+                                              *(finding for finding, _ in assessment.expired))
+                  if finding.ecosystem == "python"}
+    for risk in python_risks:
+        if risk.id.startswith("PYSEC-") and risks.package_key(risk.package, "python") in unaccepted:
+            risks.warn(f"{subject}: {risk.source} accepts {risk.id} for {risk.package}, and grype "
+                       f"has no PYSEC ids, so it accepts nothing in the image; to accept the same "
+                       f"advisory there, add an entry with its GHSA or CVE id")
+
+
 def scan(
     config: Config,
     *,
@@ -166,22 +184,24 @@ def scan(
 
     found = matches(document)
     blocking = {match.finding for match in found if match.blocks(threshold)}
-    accepted_risks = [*container.accepted_risks,
-                      *(config.python.accepted_risks if config.python else ()),
+    python_risks = config.python.accepted_risks if config.python else ()
+    accepted_risks = [*container.accepted_risks, *python_risks,
                       *(config.node.accepted_risks if config.node else ())]
-    judged = risks.assess([match.finding for match in found], accepted_risks,
-                          on=today or risks.today())
-    assessment = risks.Assessment(
-        accepted=tuple((finding, risk) for finding, risk in judged.accepted),
-        expired=tuple((finding, risk) for finding, risk in judged.expired if finding in blocking),
-        open=tuple(finding for finding in judged.open if finding in blocking),
-        stale=tuple(risk for risk in judged.stale if risk.ecosystem == "container"),
+    assessment = risks.assess(
+        [match.finding for match in found], accepted_risks, on=today or risks.today(),
+        fails=lambda finding: finding in blocking,
+        judges=lambda risk: risk.ecosystem == "container",
     )
     risks.report(assessment, subject=subject, summary=False)
-    passed = len(found) - len(assessment.open) - len(assessment.expired) - len(assessment.accepted)
-    print(f"{subject}: {len(found)} finding(s); {len(assessment.open) + len(assessment.expired)} "
-          f"at or above {threshold} with a fix and not accepted, {len(assessment.accepted)} "
-          f"accepted, {passed} below {threshold} or without a fix")
+    _warn_pysec(assessment, python_risks, subject)
+
+    accepted_blocking = sum(1 for finding, _ in assessment.accepted if finding in blocking)
+    failing = len(assessment.open) + len(assessment.expired)
+    accepted_below = len(assessment.accepted) - accepted_blocking
+    print(f"{subject}: {len(found)} finding(s); at or above {threshold} with a fix: "
+          f"{accepted_blocking + failing} ({failing} not accepted, {accepted_blocking} accepted); "
+          f"below {threshold} or without a fix: {len(assessment.passed) + accepted_below} "
+          f"({accepted_below} accepted)")
     if assessment.failed:
         raise ContainerError(f"{subject} has fixable vulnerabilities at or above {threshold}: "
                              f"{assessment.failure()}")

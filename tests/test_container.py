@@ -121,6 +121,22 @@ class ToolTests(unittest.TestCase):
                 with self.assertRaisesRegex(ContainerError, "holds no single scanner binary"):
                     self.install(data, tool)
 
+    def test_a_download_past_the_size_cap_is_stopped_before_its_digest_is_checked(self) -> None:
+        class Response(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        written = io.BytesIO()
+        with patch.object(tools, "urlopen", return_value=Response(b"x" * 5000)), \
+                self.assertRaisesRegex(ContainerError, "is larger than 4096 bytes; stopped"):
+            tools.download("https://github.com/example/scanner/releases/download/v1/x.tar.gz",
+                           written, limit=4096)
+        self.assertLessEqual(len(written.getvalue()), 4096)
+        self.assertEqual(tools.MAXIMUM_ARCHIVE_BYTES, 256 << 20)
+
     def test_a_platform_without_a_pinned_build_is_refused(self) -> None:
         with self.assertRaisesRegex(ContainerError, "no pinned scanner build for linux_arm64"):
             tools.install(SCANNER, self.directory, platform="linux_arm64", fetch=self.serving(ARCHIVE))
@@ -251,8 +267,17 @@ class ImageTests(unittest.TestCase):
                   grype_match("curl", "8.0.0", "rpm", "CVE-2026-3001", "Medium"),
                   grype_match("glibc", "2.34", "rpm", "CVE-2026-3002", "Critical", state="not-fixed"),
                   grype_match("bash", "5.2", "rpm", "CVE-2026-3003", "Critical", state="wont-fix"))
-        self.assertIn("3 finding(s); 0 at or above high with a fix and not accepted, 0 accepted, "
-                      "3 below high or without a fix", self.output)
+        self.assertIn("3 finding(s); at or above high with a fix: 0 (0 not accepted, 0 accepted); "
+                      "below high or without a fix: 3 (0 accepted)", self.output)
+
+    def test_the_summary_counts_blocking_and_passing_findings_apart(self) -> None:
+        with self.assertRaises(ContainerError):
+            self.scan(self.config(CONFIG + CONTAINER),
+                      grype_match("openssl-libs", "3.0.8", "rpm", "CVE-2026-2001", "Low"),
+                      grype_match("curl", "8.0.0", "rpm", "CVE-2026-3001", "Medium"),
+                      grype_match("glibc", "2.34", "rpm", "CVE-2026-3002", "High"))
+        self.assertIn("3 finding(s); at or above high with a fix: 1 (1 not accepted, 0 accepted); "
+                      "below high or without a fix: 2 (1 accepted)", self.output)
 
     def test_the_threshold_comes_from_the_config_or_the_command(self) -> None:
         medium = grype_match("curl", "8.0.0", "rpm", "CVE-2026-3001", "Medium")
@@ -281,6 +306,30 @@ class ImageTests(unittest.TestCase):
         self.assertIn("ecosystems.python.accepted-risks[0]", self.output)
         with self.assertRaisesRegex(ContainerError, "setuptools 79.0.1 GHSA-h35f-9h28-mq5c is not accepted"):
             self.scan(config, grype_match("setuptools", "79.0.1", "rpm", "GHSA-h35f-9h28-mq5c", "High"))
+
+    def test_a_python_entry_by_pysec_id_is_named_when_the_image_needs_it(self) -> None:
+        pysec = PYTHON.replace("GHSA-h35f-9h28-mq5c", "PYSEC-2026-3447")
+        finding = grype_match("setuptools", "79.0.1", "python", "GHSA-h35f-9h28-mq5c", "High",
+                              related=["CVE-2026-59890"])
+        with self.assertRaises(ContainerError):
+            self.scan(self.config(CONFIG + pysec), finding)
+        self.assertIn("warning: example:local: ecosystems.python.accepted-risks[0] accepts "
+                      "PYSEC-2026-3447 for setuptools, and grype has no PYSEC ids, so it accepts "
+                      "nothing in the image", self.output)
+
+    def test_a_pysec_entry_beside_a_ghsa_one_that_covers_the_image_is_not_named(self) -> None:
+        both = PYTHON + """
+[[ecosystems.python.accepted-risks]]
+id = "PYSEC-2026-3447"
+package = "setuptools"
+reason = "The same advisory, as pip-audit names it."
+review-by = 2027-01-31
+"""
+        config = self.config(CONFIG + both)
+        self.assertEqual([entry.id for entry in config.python.accepted_risks],
+                         ["GHSA-h35f-9h28-mq5c", "PYSEC-2026-3447"])
+        self.scan(config, grype_match("setuptools", "79.0.1", "python", "GHSA-h35f-9h28-mq5c", "High"))
+        self.assertNotIn("PYSEC", self.output)
 
     def test_an_expired_entry_fails_a_fixable_finding(self) -> None:
         with self.assertRaisesRegex(ContainerError, "until 2027-01-31, which has passed"):
