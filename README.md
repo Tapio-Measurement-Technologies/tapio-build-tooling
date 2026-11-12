@@ -2,7 +2,8 @@
 
 Shared supply-chain tooling for Tapio products. Current adapters support Python
 requirements and npm package locks, vulnerability audits, and CycloneDX SBOM
-evidence, release download pages and private build archives. Ecosystem layout
+evidence, container image SBOMs and scans, release download pages and private
+build archives. Ecosystem layout
 allows later PlatformIO adapters without changing existing interfaces.
 
 ## Install
@@ -228,13 +229,118 @@ requirement group:
 - An entry names its package, so sharing it across groups cannot accept an
   advisory in some other package.
 - Groups are a Python notion; npm has one lock. Per ecosystem is the one
-  shape both read, and the one a scan of a container image - which holds
-  packages of both ecosystems and no groups at all - can reuse.
+  shape both read, and the one a [scan of a container image](#container-images),
+  which holds packages of both ecosystems and no groups at all, reuses.
 
 The cost is in telling a stale entry from another group's: with several
 groups, a group's audit skips entries for packages its lock does not pin, and
 an entry is flagged only by the audit of a lock that pins the package without
 the advisory.
+
+## Container images
+
+A product shipped as a container image gets an SBOM of the image itself and a
+vulnerability scan of it, on every build. A registry's basic scan, such as
+ECR's, reads the operating-system packages once, when the image is pushed;
+this one also sees the Python and npm packages the image installed, and fails
+the build.
+
+```bash
+tapio-build --project . container tools                 # download and verify syft and grype
+tapio-build --project . container sbom --image example-backend:local \
+  --output dist/image.cdx.json --product example-backend --version 1.4.0
+tapio-build --project . container scan --sbom dist/image.syft.json \
+  --report dist/image-vulnerabilities.json --image example-backend:local
+```
+
+`sbom` reads the image from the local Docker daemon, where the job built it -
+no registry is asked - and has [syft](https://github.com/anchore/syft) write
+two documents from one pass: the CycloneDX SBOM kept as evidence and syft's
+own JSON, beside it as `<name>.syft.json` unless `--syft-output` says
+otherwise. `scan` has [grype](https://github.com/anchore/grype) read that
+JSON back, writes grype's JSON report, prints grype's table, and fails on any
+finding at or above the threshold **with a fix available** that no accepted
+risk covers. A finding below the threshold, or one the distribution has not
+fixed or will not fix, is counted and passes. A severity grype does not know
+counts as at the threshold.
+
+```toml
+[container]
+fail-on = "high"                   # negligible | low | medium | high | critical; high by default
+
+[[container.accepted-risks]]
+id = "CVE-2026-12345"              # CVE or GHSA
+package = "openssl-libs"           # an rpm, deb, apk, or language package in the image
+reason = "The base image's fix is not released yet; the function terminates no TLS itself."
+review-by = 2026-12-31
+```
+
+The `container` table is optional - without it the scan fails on `high` - and
+is configuration enough on its own, for a repository with no lock to audit.
+Entries have the shape and the rules of the [accepted risks](#accepted-risks)
+above. A container entry covers a package of any kind; for a Python or npm
+package in the image, that ecosystem's entries apply as well, so the risk
+accepted for the lock is accepted for the image without a second entry. An id
+matches grype's id for the finding or any related vulnerability it lists, so a
+CVE covers a distribution advisory (`ALAS2023-…`, `DSA-…`) raised for it.
+grype names Python advisories by GHSA and CVE, never PYSEC: an ecosystem
+entry the image scan should honour uses one of those. Only container entries
+are flagged when they match nothing; an ecosystem's are its own audit's to
+flag. `--fail-on` overrides the configured threshold.
+
+### Why grype
+
+grype reads the SBOM syft has just written, so the scan judges exactly the
+packages the published SBOM lists, and the image is catalogued once. Trivy
+would bring a second cataloguer whose idea of the image's contents could
+differ from the SBOM's. grype's report also carries what the gate needs per
+match: the fix state (`fixed`, `not-fixed`, `wont-fix`, `unknown`) with the
+fixed versions, and the related CVEs behind a distribution's advisory. syft
+and grype come from one project with one release process - a checksums file
+per release, signed with Sigstore by the release workflow - so one way of
+pinning covers both.
+
+### The scanners
+
+`container tools` downloads each scanner's release archive from its GitHub
+release at the version `src/tapio_build_tools/container/tools.py` pins,
+checks the archive against its pinned SHA-256, extracts the one binary, and
+checks that against its own pinned SHA-256. `sbom` and `scan` install the same
+way if needed, and check the binary's digest again every time before they run
+it. A mismatch is an error and leaves nothing behind. Builds are pinned for
+Linux x86_64 and aarch64, the GitHub-hosted runners; nothing is fetched by a
+script or piped into a shell. Both scanners run in an empty directory with
+every `SYFT_*` and `GRYPE_*` variable removed, so a `.grype.yaml` in the
+repository or a variable in the job cannot ignore matches or leave packages
+out. grype fetches its vulnerability database at run time, as it must to be
+current, and checks it itself.
+
+The pins are syft 1.56.0 and grype 0.121.1, whose checksum files were
+verified against Anchore's release-workflow identity with Sigstore. To move
+them, take releases past the cooldown and follow the steps in the module's
+docstring.
+
+### GitHub Action
+
+```yaml
+- run: docker build --tag "example-backend:${GITHUB_SHA}" backend
+- uses: Tapio-Measurement-Technologies/tapio-build-tooling/actions/container-supply-chain@<sha>
+  with:
+    image: example-backend:${{ github.sha }}
+    product: example-backend
+    upload-name: example-backend-image-sbom
+```
+
+The action sets up Python, installs the tooling from its hashed lock,
+validates the configuration, downloads and verifies the scanners, writes the
+SBOM and uploads it as the `upload-name` artifact, then scans. The grype
+report is uploaded as `<upload-name>-vulnerabilities`, also when the scan
+fails. Inputs: `image` (required), `config`, `product`, `version`, `output`
+(`dist/image.cdx.json`), `report` (`dist/image-vulnerabilities.json`),
+`fail-on`, `scan` (`'false'` writes and uploads the SBOM only), `upload-name`,
+`python-version`. Outputs: `sbom-file`, `report-file`. The job needs nothing
+beyond `contents: read`. `.github/workflows/container-supply-chain.yml` runs
+it against a fixture image on both runner architectures.
 
 ## GitHub Actions
 
@@ -242,6 +348,7 @@ the advisory.
 - `actions/python-release-checks`: config, lock freshness, release ages, audit, no artifact
 - `actions/python-release-evidence`: optional audit and artifact-bound PyInstaller SBOM
 - `actions/node-supply-chain`: npm lock validation, release ages, source SBOM, audit
+- `actions/container-supply-chain`: image SBOM with syft, uploaded; grype scan that fails on fixable findings
 - `actions/publish-downloads`: package a release, publish its download pages to S3
 - `actions/publish-release-notes`: put a GitHub release's notes on its download pages
 - `actions/builder-image`: build the image a build runs in and push it to GHCR

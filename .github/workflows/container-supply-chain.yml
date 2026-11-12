@@ -1,0 +1,55 @@
+name: Container Supply Chain
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Runs the container action end to end on both runner architectures it
+  # pins scanners for: download and verify syft and grype, write the SBOM,
+  # upload it, scan, and upload the report.
+  self-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+
+      - name: Build the fixture image
+        run: docker build --tag "tapio-build-tooling-fixture:${GITHUB_SHA}" tests/fixtures/container
+
+      - name: SBOM and scan the fixture image
+        id: image
+        uses: ./actions/container-supply-chain
+        with:
+          config: build-tooling.toml
+          image: tapio-build-tooling-fixture:${{ github.sha }}
+          product: tapio-build-tooling
+          upload-name: fixture-image-sbom-${{ matrix.runner }}
+
+      - name: Check the SBOM and the report
+        env:
+          SBOM: ${{ steps.image.outputs.sbom-file }}
+          REPORT: ${{ steps.image.outputs.report-file }}
+        run: |
+          python - <<'EOF'
+          import json, os
+          sbom = json.load(open(os.environ["SBOM"]))
+          assert sbom["bomFormat"] == "CycloneDX", sbom.get("bomFormat")
+          names = {component.get("name") for component in sbom.get("components", [])}
+          assert "tapio-build-tooling-fixture" in names, sorted(names)
+          report = json.load(open(os.environ["REPORT"]))
+          assert report["matches"] == [], report["matches"]
+          print("SBOM lists the fixture package; grype found nothing in it")
+          EOF

@@ -42,7 +42,7 @@ class ActionTests(unittest.TestCase):
                 self.assertRegex(value, r"^[^@]+@[0-9a-f]{40}$")
 
     def test_ci_has_least_privilege_permissions(self) -> None:
-        for name in ["ci.yml", "supply-chain.yml"]:
+        for name in ["ci.yml", "supply-chain.yml", "container-supply-chain.yml"]:
             with self.subTest(workflow=name):
                 workflow = (ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
                 self.assertIn("permissions:\n  contents: read", workflow)
@@ -149,6 +149,25 @@ class ActionTests(unittest.TestCase):
         self.assertLess(action.index("archive names"), action.index("docker build"))
         self.assertNotIn("configure-aws-credentials", action)
 
+    def test_container_action_verifies_its_scanners_and_uploads_the_sbom_before_scanning(self) -> None:
+        action = (ROOT / "actions/container-supply-chain" / "action.yml").read_text(encoding="utf-8")
+        order = ["config validate", "container tools", "container sbom", "upload-artifact",
+                 "container scan"]
+        for earlier, later in zip(order, order[1:]):
+            with self.subTest(earlier=earlier, later=later):
+                self.assertLess(action.index(earlier), action.index(later))
+        # The report is kept when the scan fails: it says why.
+        self.assertIn("!cancelled() && inputs.scan == 'true'", action.split("container scan")[1])
+        self.assertNotIn("docker pull", action)
+
+    def test_no_action_or_workflow_fetches_and_runs_a_script(self) -> None:
+        files = [*ROOT.glob(".github/workflows/*.yml"), *ROOT.glob("actions/*/action.yml")]
+        for path in files:
+            text = path.read_text(encoding="utf-8")
+            with self.subTest(file=str(path.relative_to(ROOT))):
+                self.assertIsNone(re.search(r"\b(curl|wget)\b[^\n]*\|\s*(ba|z)?sh\b", text))
+                self.assertNotIn("install.sh", text)
+
     def test_keep_signed_module_keeps_only_through_the_tooling(self) -> None:
         """No signing identity and no signing: the job that keeps cannot sign."""
         action = (ROOT / "actions/keep-signed-module" / "action.yml").read_text(encoding="utf-8")
@@ -189,7 +208,7 @@ class ActionTests(unittest.TestCase):
     def test_publish_downloads_carries_no_deployment_of_its_own(self) -> None:
         """The tooling is public; buckets, roles and addresses belong to the consumer."""
         for name in ["publish-downloads", "publish-release-notes", "publish-archive", "builder-image",
-                     "sign-module", "keep-signed-module"]:
+                     "sign-module", "keep-signed-module", "container-supply-chain"]:
             action = (ROOT / "actions" / name / "action.yml").read_text(encoding="utf-8")
             for literal in ["arn:aws:", "amazonaws.com", "s3://", "tapiotechnologies",
                             "vault.azure.net", "/subscriptions/"]:

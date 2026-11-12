@@ -75,10 +75,15 @@ class Finding:
 
 
 def matches(risk: AcceptedRisk, finding: Finding) -> bool:
-    """Whether *risk* names *finding*'s package and one of its ids."""
+    """Whether *risk* names *finding*'s package and one of its ids.
+
+    An ecosystem's entry covers that ecosystem's packages only; a container
+    entry covers a package of any kind in an image, its name compared as the
+    package's own ecosystem compares names.
+    """
     return (
-        risk.ecosystem == finding.ecosystem
-        and package_key(risk.package, risk.ecosystem) == finding.key
+        risk.ecosystem in (finding.ecosystem, "container")
+        and package_key(risk.package, finding.ecosystem) == finding.key
         and risk.id in finding.ids
     )
 
@@ -156,7 +161,7 @@ def warn(message: str) -> None:
         print(f"warning: {message}")
 
 
-def report(assessment: Assessment, *, subject: str) -> None:
+def report(assessment: Assessment, *, subject: str, summary: bool = True) -> None:
     """Print every finding and how it was judged, and flag each stale entry."""
     for finding, risk in assessment.accepted:
         print(f"accepted: {finding.describe()} - {risk.source}, review by "
@@ -169,6 +174,8 @@ def report(assessment: Assessment, *, subject: str) -> None:
     for risk in assessment.stale:
         warn(f"{subject}: {risk.source} accepts {risk.id} for {risk.package}, which no finding "
              f"matches any more; remove the entry")
+    if not summary:
+        return
     total = len(assessment.accepted) + len(assessment.expired) + len(assessment.open)
     print(f"{subject}: {total} finding(s), {len(assessment.accepted)} accepted, "
           f"{len(assessment.open) + len(assessment.expired)} not accepted")

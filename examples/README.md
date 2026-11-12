@@ -26,6 +26,14 @@ package ecosystem.
 | --- | --- |
 | archive-firmware | One proprietary firmware image, no ecosystem, custom zip name |
 
+The `container-*.toml` files show a `container` table: a product shipped as a
+container image, whose scan honours the Python ecosystem's accepted risks for
+the Python packages in the image and its own for everything else.
+
+| Example | Shape |
+| --- | --- |
+| container-lambda | One Lambda image, Python lock, accepted risks for the lock and the base image |
+
 Lock-only groups cannot be regenerated. Every locked component is conservatively
 connected as direct root dependency. Add input files later to enable lock freshness
 checks and precise direct dependency graphs.

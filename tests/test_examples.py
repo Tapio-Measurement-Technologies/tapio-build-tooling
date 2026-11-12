@@ -46,6 +46,18 @@ class ExampleCompatibilityTests(unittest.TestCase):
                 config = load_config(Path(directory), example)
                 self.assertTrue(config.require_archive().files)
 
+    def test_container_examples_validate_against_a_project_of_their_shape(self) -> None:
+        examples = sorted((ROOT / "examples").glob("container-*.toml"))
+        self.assertTrue(examples)
+        for example in examples:
+            with self.subTest(example=example.name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / "requirements.in").write_text("setuptools==79.0.1\n", encoding="utf-8")
+                (root / "requirements.txt").write_text("setuptools==79.0.1\n", encoding="utf-8")
+                config = load_config(root, example)
+                self.assertIsNotNone(config.container)
+                self.assertTrue(config.container.accepted_risks)
+
     def test_examples_name_nobody_in_particular(self) -> None:
         """The repository is public: contacts in examples are placeholders."""
         for example in (ROOT / "examples").glob("*.toml"):
