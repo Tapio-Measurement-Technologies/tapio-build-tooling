@@ -114,6 +114,33 @@ class NodeAuditTests(unittest.TestCase):
         with self.assertRaisesRegex(AuditError, "https://npmjs.com/advisories/118 is not accepted"):
             self.run_audit(npm_audit(report))
 
+    def test_a_patched_copy_beside_a_vulnerable_one_is_not_reported(self) -> None:
+        lock = json.loads(json.dumps(LOCK))
+        lock["packages"]["node_modules/some-tool/node_modules/deepmerge"] = {"version": "4.3.1"}
+        (self.root / "package-lock.json").write_text(json.dumps(lock), encoding="utf-8")
+        report = npm_report(("deepmerge", "GHSA-gcqx-w48m-w2h4", "low"))
+        entry = report["vulnerabilities"]["deepmerge"]
+        entry["nodes"].append("node_modules/some-tool/node_modules/deepmerge")
+        entry["via"][0]["range"] = "<4.3.0"
+        with self.assertRaises(AuditError) as caught:
+            self.run_audit(npm_audit(report))
+        self.assertIn("deepmerge 4.2.2 GHSA-gcqx-w48m-w2h4 is not accepted", str(caught.exception))
+        self.assertNotIn("4.3.1", str(caught.exception))
+        self.assertNotIn("4.3.1", self.output)
+
+    def test_a_range_that_cannot_be_read_keeps_every_installed_copy(self) -> None:
+        lock = json.loads(json.dumps(LOCK))
+        lock["packages"]["node_modules/some-tool/node_modules/deepmerge"] = {"version": "4.3.1"}
+        (self.root / "package-lock.json").write_text(json.dumps(lock), encoding="utf-8")
+        report = npm_report(("deepmerge", "GHSA-gcqx-w48m-w2h4", "low"))
+        entry = report["vulnerabilities"]["deepmerge"]
+        entry["nodes"].append("node_modules/some-tool/node_modules/deepmerge")
+        entry["via"][0]["range"] = "^4.0.0"
+        with self.assertRaises(AuditError) as caught:
+            self.run_audit(npm_audit(report))
+        self.assertIn("deepmerge 4.2.2", str(caught.exception))
+        self.assertIn("deepmerge 4.3.1", str(caught.exception))
+
     def test_an_npm_error_report_fails_the_audit(self) -> None:
         report = {"error": {"code": "ENOLOCK", "summary": "This command requires an existing lockfile."}}
         with self.assertRaisesRegex(AuditError, "requires an existing lockfile"):

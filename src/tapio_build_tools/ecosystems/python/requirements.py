@@ -15,6 +15,7 @@ from tapio_build_tools import cooldown, risks
 from tapio_build_tools.config import Config, ConfigError, RequirementGroup
 from tapio_build_tools.cooldown import CooldownError
 from tapio_build_tools.ecosystems.python.cooldown import published_release
+from tapio_build_tools.ecosystems.python.pins import url_requirements
 
 
 class RequirementsError(RuntimeError):
@@ -48,6 +49,16 @@ def _cutoff(days: int, *, now: datetime | None = None) -> str:
     return cooldown.timestamp(cooldown.cutoff(days, now=now))
 
 
+def _url_required(config: Config) -> set[str]:
+    """The packages any group's input or lock requires by URL."""
+    names: set[str] = set()
+    for group in config.require_python().requirements:
+        for path in (group.input, group.lock):
+            if path is not None and path.is_file():
+                names |= url_requirements(path.read_text(encoding="utf-8"))
+    return names
+
+
 def _excepted(config: Config, cutoff: str, *, today: date | None = None) -> dict[str, str]:
     """A cutoff of its own for each release excepted from the cooldown.
 
@@ -58,17 +69,34 @@ def _excepted(config: Config, cutoff: str, *, today: date | None = None) -> dict
     of the package in unexcepted. An exception whose release is older than
     the window gets none: the global cutoff already allows it, and an earlier
     one of its own would hold the package back.
+
+    Nor does a package required by URL - a wheel from a GitHub release. uv
+    takes a URL requirement as written: --exclude-newer filters the
+    candidates an index offers, and a URL offers none to filter, so the
+    cutoff never holds such a wheel back (uv 0.13.4 resolves one released
+    after its --exclude-newer). It is not on PyPI to be dated
+    either; `python cooldown` dates it through GitHub, which needs a token
+    and is no help to uv. So it gets no cutoff, and nothing is looked up.
+
+    Every other exception is dated on PyPI, so with exceptions configured a
+    compile needs PyPI reachable even with `--check`.
     """
     moment = cooldown.published(cutoff)
     on = today or risks.today()
+    by_url = _url_required(config)
     cutoffs: dict[str, str] = {}
     for exception in config.require_python().cooldown_exceptions:
-        if not exception.active(on):
+        name = risks.package_key(exception.package, "python")
+        if not exception.active(on) or name in by_url:
             continue
-        released = published_release(exception.package, exception.version)
+        try:
+            released = published_release(exception.package, exception.version)
+        except CooldownError as exc:
+            raise RequirementsError(
+                f"{exception.source} excepts {exception.label} from the cooldown, and it could "
+                f"not be dated on PyPI: {exc}") from exc
         if released <= moment:
             continue
-        name = risks.package_key(exception.package, "python")
         cutoffs[name] = cooldown.timestamp(released + timedelta(seconds=1))
         print(f"{exception.label}: excepted from the cooldown by {exception.source}; "
               f"released {cooldown.timestamp(released)}")
@@ -167,10 +195,7 @@ def compile_requirements(
         if cooldown and python.cooldown_days is not None
         else None
     )
-    try:
-        package_cutoffs = _excepted(config, cutoff) if cutoff is not None else {}
-    except CooldownError as exc:
-        raise RequirementsError(f"dating a cooldown exception failed: {exc}") from exc
+    package_cutoffs = _excepted(config, cutoff) if cutoff is not None else {}
     results: list[CompileResult] = []
     stale: list[str] = []
     for group in groups:

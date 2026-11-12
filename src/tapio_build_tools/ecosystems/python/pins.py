@@ -182,6 +182,12 @@ def read_pins(lock: Path) -> list[Pin]:
     return pins
 
 
+def url_requirements(text: str) -> set[str]:
+    """The names *text* - a requirements.in or a lock - requires by URL, PEP 503 normalised."""
+    return {canonicalize_name(match["name"]) for entry in entries(text)
+            if (match := _URL_PIN.match(entry)) is not None}
+
+
 def _is_url_pin(entry: str) -> bool:
     """Whether *entry* is a URL pin, and nothing but; LockError if it starts as one only."""
     match = _URL_PIN.match(entry)

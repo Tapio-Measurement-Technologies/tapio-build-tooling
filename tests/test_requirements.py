@@ -179,6 +179,28 @@ class RequirementsTests(unittest.TestCase):
         dated.assert_not_called()
         self.assertNotIn("--exclude-newer-package", command)
 
+    def test_an_exception_for_a_wheel_required_by_url_is_not_dated_on_pypi(self) -> None:
+        url = ("https://github.com/example-org/tools/releases/download/update-check-v0.2.0/"
+               "tapio_update_check-0.2.0-py3-none-any.whl")
+        (self.root / "requirements.in").write_text(f"tapio-update-check @ {url}\n", encoding="utf-8")
+        extra = EXCEPTION.replace('"Certifi"', '"tapio_update_check"').replace('"2026.10.19"', '"0.2.0"')
+        command, dated = self.compile_with_exception(datetime.now(timezone.utc), extra)
+        dated.assert_not_called()
+        self.assertNotIn("--exclude-newer-package", command)
+        self.assertIn("--exclude-newer", command)
+
+    def test_an_exception_that_cannot_be_dated_is_named(self) -> None:
+        from tapio_build_tools.cooldown import CooldownError
+
+        with patch("tapio_build_tools.ecosystems.python.requirements.published_release",
+                   side_effect=CooldownError("Certifi==2026.10.19 is not on PyPI")), \
+                patch("tapio_build_tools.ecosystems.python.requirements.subprocess.run") as run, \
+                self.assertRaisesRegex(RequirementsError,
+                                       r"ecosystems.python.cooldown-exceptions\[0\] excepts Certifi "
+                                       r"2026.10.19 from the cooldown, and it could not be dated on PyPI"):
+            compile_requirements(self.config(cooldown=7, extra=EXCEPTION), check=True)
+        run.assert_not_called()
+
     def test_cutoff_is_rfc_3339_utc(self) -> None:
         now = datetime(2026, 9, 22, 13, 6, 25, tzinfo=timezone.utc)
         self.assertEqual(_cutoff(7, now=now), "2026-09-15T13:06:25Z")

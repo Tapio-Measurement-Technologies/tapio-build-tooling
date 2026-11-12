@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
 import re
@@ -57,6 +57,21 @@ class Product:
     component_type: str = "application"
 
 
+def package_key(name: str, ecosystem: str) -> str:
+    """*name* as an ecosystem compares package names: PEP 503 for Python, exactly otherwise."""
+    return canonicalize_name(name) if ecosystem == "python" else name
+
+
+def release_key(package: str, version: str, ecosystem: str) -> tuple[str, object]:
+    """A release as *ecosystem* compares them: for Python, 1.0 and 1.0.0 are one release."""
+    if ecosystem == "python":
+        try:
+            return package_key(package, ecosystem), Version(version)
+        except InvalidVersion:
+            pass
+    return package_key(package, ecosystem), version
+
+
 @dataclass(frozen=True)
 class AcceptedRisk:
     """A known advisory a product carries on purpose, until it is reviewed.
@@ -91,6 +106,12 @@ class CooldownException:
     reason: str
     review_by: date | None
     source: str
+    ecosystem: str = "python"
+    # The release as the ecosystem compares them, for matching a lock's pins.
+    key: tuple[str, object] = field(init=False, compare=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "key", release_key(self.package, self.version, self.ecosystem))
 
     @property
     def label(self) -> str:
@@ -405,7 +426,7 @@ def load_config(
                 python_data, "ecosystems.python", "python", PYTHON_ADVISORY_IDS, _python_package
             ),
             cooldown_exceptions=_cooldown_exceptions(
-                python_data, "ecosystems.python", _python_package, _python_version
+                python_data, "ecosystems.python", "python", _python_package, _python_version
             ),
         )
 
@@ -444,7 +465,7 @@ def load_config(
                 node_data, "ecosystems.node", "node", NODE_ADVISORY_IDS, _node_package
             ),
             cooldown_exceptions=_cooldown_exceptions(
-                node_data, "ecosystems.node", _node_package, _node_version
+                node_data, "ecosystems.node", "node", _node_package, _node_version
             ),
         )
 
@@ -502,7 +523,6 @@ def _python_package(value: str, label: str) -> str:
 
 
 def _python_version(value: str, label: str) -> Version:
-    """*value* as a version, which compares 1.0 and 1.0.0 equal as pip does."""
     try:
         return Version(value)
     except InvalidVersion as exc:
@@ -566,8 +586,9 @@ def _accepted_risks(
 def _cooldown_exceptions(
     table: dict[str, Any],
     label: str,
+    ecosystem: str,
     package_name: Callable[[str, str], str],
-    version_key: Callable[[str, str], object],
+    version_check: Callable[[str, str], object],
 ) -> tuple[CooldownException, ...]:
     """The releases a cooldown check accepts while they are younger than the window."""
     exceptions: list[CooldownException] = []
@@ -579,17 +600,21 @@ def _cooldown_exceptions(
         _keys(entry, {"package", "version", "reason", "review-by"}, entry_label)
         package = _required_string(entry, "package", entry_label).strip()
         version = _required_string(entry, "version", entry_label).strip()
-        key = (package_name(package, entry_label), version_key(version, entry_label))
-        if key in seen:
-            raise ConfigError(f"{entry_label} excepts {package} {version} again; see {seen[key]}")
-        seen[key] = entry_label
-        exceptions.append(CooldownException(
+        package_name(package, entry_label)
+        version_check(version, entry_label)
+        exception = CooldownException(
             package=package,
             version=version,
             reason=_required_string(entry, "reason", entry_label).strip(),
             review_by=_review_by(entry, entry_label, required=False),
             source=entry_label,
-        ))
+            ecosystem=ecosystem,
+        )
+        if exception.key in seen:
+            raise ConfigError(f"{entry_label} excepts {package} {version} again; "
+                              f"see {seen[exception.key]}")
+        seen[exception.key] = entry_label
+        exceptions.append(exception)
     return tuple(exceptions)
 
 

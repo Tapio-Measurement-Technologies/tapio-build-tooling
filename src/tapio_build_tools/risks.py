@@ -19,19 +19,14 @@ from datetime import date, datetime, timezone
 import os
 from typing import Iterable
 
-from packaging.utils import canonicalize_name
+from tapio_build_tools.config import AcceptedRisk, package_key
 
-from tapio_build_tools.config import AcceptedRisk
+__all__ = ["Assessment", "Finding", "assess", "matches", "package_key", "report", "today", "warn"]
 
 
 def today() -> date:
     """The UTC date review-by dates are compared against."""
     return datetime.now(timezone.utc).date()
-
-
-def package_key(name: str, ecosystem: str) -> str:
-    """*name* as an ecosystem compares package names."""
-    return canonicalize_name(name) if ecosystem == "python" else name
 
 
 @dataclass(frozen=True)
@@ -91,6 +86,9 @@ class Assessment:
     expired: tuple[tuple[Finding, AcceptedRisk], ...]
     open: tuple[Finding, ...]
     stale: tuple[AcceptedRisk, ...]
+    # Entries this lock matches nothing for, whose package another lock also
+    # pins: that lock may need them, so they are not called stale here.
+    unmatched: tuple[AcceptedRisk, ...] = ()
 
     @property
     def failed(self) -> bool:
@@ -113,13 +111,17 @@ def assess(
     *,
     on: date,
     pinned: set[str] | None = None,
+    elsewhere: set[str] | None = None,
 ) -> Assessment:
     """Sort *findings* by whether an entry in *risks* accepts them *on* that date.
 
-    *pinned* is the package keys the audited lock holds, when the entries are
-    shared by several locks: an entry for a package this lock does not hold is
-    another lock's business, and is not called stale here. Without it every
-    entry that matches nothing is stale.
+    Where several locks share the entries, *pinned* is the package keys the
+    audited lock holds and *elsewhere* those the other locks hold. An entry
+    that matches nothing here is stale only if no other lock pins its package:
+    one this lock pins at a fixed release may still be needed by a lock that
+    pins a vulnerable one, and is reported as unmatched instead; one only
+    another lock pins is that lock's to judge. Without *pinned*, every entry
+    that matches nothing is stale.
     """
     risks = tuple(risks)
     used: set[AcceptedRisk] = set()
@@ -136,12 +138,18 @@ def assess(
             expired.append((finding, matching[0]))
         else:
             unaccepted.append(finding)
-    stale = tuple(
-        risk for risk in risks
-        if risk not in used
-        and (pinned is None or package_key(risk.package, risk.ecosystem) in pinned)
-    )
-    return Assessment(tuple(accepted), tuple(expired), tuple(unaccepted), stale)
+    stale: list[AcceptedRisk] = []
+    unmatched: list[AcceptedRisk] = []
+    for risk in risks:
+        if risk in used:
+            continue
+        key = package_key(risk.package, risk.ecosystem)
+        if pinned is None or key not in (elsewhere or set()):
+            stale.append(risk)
+        elif key in pinned:
+            unmatched.append(risk)
+    return Assessment(tuple(accepted), tuple(expired), tuple(unaccepted), tuple(stale),
+                      tuple(unmatched))
 
 
 def warn(message: str) -> None:
@@ -169,6 +177,9 @@ def report(assessment: Assessment, *, subject: str) -> None:
     for risk in assessment.stale:
         warn(f"{subject}: {risk.source} accepts {risk.id} for {risk.package}, which no finding "
              f"matches any more; remove the entry")
+    for risk in assessment.unmatched:
+        print(f"not matched in {subject}: {risk.source} accepts {risk.id} for {risk.package}, "
+              f"which another group's lock also pins; that group's audit judges it")
     total = len(assessment.accepted) + len(assessment.expired) + len(assessment.open)
     print(f"{subject}: {total} finding(s), {len(assessment.accepted)} accepted, "
           f"{len(assessment.open) + len(assessment.expired)} not accepted")

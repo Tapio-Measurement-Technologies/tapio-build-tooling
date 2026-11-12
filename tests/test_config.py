@@ -3,6 +3,8 @@ from pathlib import Path
 import tempfile
 import unittest
 
+from packaging.version import Version
+
 from tapio_build_tools.config import ConfigError, load_config
 
 
@@ -305,6 +307,7 @@ class AcceptedRiskConfigTests(unittest.TestCase):
         text = BASE.replace('version = "3.12"', 'version = "3.12"\ncooldown-days = 7') + EXCEPTION
         [exception] = self.load(text).python.cooldown_exceptions
         self.assertEqual(exception.label, "certifi 2026.10.19")
+        self.assertEqual(exception.key, ("certifi", Version("2026.10.19.0")))
         self.assertIsNone(exception.review_by)
         self.assertTrue(exception.active(date(2099, 1, 1)))
         dated = self.load(text + 'review-by = 2026-11-30\n').python.cooldown_exceptions[0]
