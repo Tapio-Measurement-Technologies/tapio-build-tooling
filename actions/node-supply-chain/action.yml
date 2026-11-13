@@ -43,14 +43,14 @@ runs:
   using: composite
   steps:
     - name: Set up Node
-      uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
       with:
         node-version: ${{ inputs.node-version }}
         cache: npm
         cache-dependency-path: ${{ inputs.package-lock }}
 
     - name: Set up Python
-      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+      uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
       with:
         python-version: ${{ inputs.python-version }}
 
@@ -97,7 +97,7 @@ runs:
           --platform "$TARGET_PLATFORM" --commit-sha "$GITHUB_SHA"
 
     - name: Upload source SBOM
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: ${{ inputs.upload-name }}
         path: ${{ inputs.output }}
