@@ -56,7 +56,10 @@ A version the lock installs at several paths, nested under different parents
 because another version holds the top-level slot, is one component in the SBOM.
 It lists every install path, is required if any path needs it in production,
 and depends on everything any of its copies resolves to. npm 10 writes it once
-per path; `node sbom` merges those copies.
+per path; `node sbom` merges those copies. npm 11 writes it once, as its first
+path has it; `node sbom` reads the other paths' scope and dependencies from
+`package-lock.json`, so both give the same BOM. The lock therefore needs a
+`packages` table (lockfileVersion 2 or 3).
 
 ## Release cooldown
 
