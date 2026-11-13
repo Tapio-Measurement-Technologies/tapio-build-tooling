@@ -24,9 +24,15 @@ class SbomError(RuntimeError):
 
 
 _PATH_PROPERTY = "cdx:npm:package:path"
+_DEVELOPMENT_PROPERTY = "cdx:npm:package:development"
 # The strongest scope first: a version one install path needs at run time is
 # required, whatever its other copies are.
 _SCOPES = ("required", "optional", "excluded")
+# The lock fields npm draws a package's dependency edges from. Development
+# edges count only for a package outside node_modules: the project, its
+# workspaces and other linked directories.
+_EDGE_FIELDS = ("dependencies", "optionalDependencies", "peerDependencies")
+_TOP_EDGE_FIELDS = (*_EDGE_FIELDS, "devDependencies")
 
 
 def _run_npm(project: Path) -> dict:
@@ -115,9 +121,9 @@ def _merge_install_paths(bom: dict) -> None:
     component, required if any path needs it, and one dependency entry that
     depends on everything any copy resolves to, sorted. A child is named by
     its own name@version, so an edge to a nested copy still names the version
-    nested there. Entries already listed once are left as npm wrote them, so
-    npm 11, which lists each version once as its first install path has it,
-    passes through unchanged.
+    nested there. Entries already listed once are left as npm wrote them;
+    npm 11 lists each version once itself, and _correct_from_lock restores
+    what its single copy leaves out.
     """
     components = _by_ref(bom.get("components") or [], "bom-ref")
     bom["components"] = [
@@ -136,6 +142,126 @@ def _merge_install_paths(bom: dict) -> None:
         }
         for entries in dependencies.values()
     ]
+
+
+def _read_lock(lock: Path) -> dict[str, dict]:
+    """The lock's packages table: each install path's entry."""
+    try:
+        text = lock.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise SbomError(f"cannot read {lock.name}") from exc
+    try:
+        document = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise SbomError(f"{lock.name} is not valid JSON") from exc
+    packages = document.get("packages") if isinstance(document, dict) else None
+    if not isinstance(packages, dict):
+        raise SbomError(f"{lock.name} has no packages table; npm lockfileVersion 2 or 3 is needed")
+    return {path: entry for path, entry in packages.items() if isinstance(entry, dict)}
+
+
+def _locked_ref(path: str, entry: dict) -> str | None:
+    """The name@version npm lists the package installed at *path* under."""
+    # The lock records a name only where it differs from the directory's,
+    # as for an alias; npm's reference uses the package's own name.
+    name = entry.get("name") or path.rsplit("node_modules/", 1)[-1]
+    version = entry.get("version")
+    if not isinstance(name, str) or not isinstance(version, str):
+        return None
+    return f"{name}@{version}"
+
+
+def _resolve(packages: dict[str, dict], path: str, name: str) -> str | None:
+    """The install path that *name*, required from the package at *path*, loads.
+
+    Node looks for node_modules/<name> in the package's own directory, then in
+    each directory above it, skipping directories that are themselves
+    node_modules. A link loads the directory it points to.
+    """
+    parts = path.split("/") if path else []
+    while True:
+        if not parts or parts[-1] != "node_modules":
+            candidate = "/".join([*parts, "node_modules", name])
+            entry = packages.get(candidate)
+            if entry is not None:
+                if not entry.get("link"):
+                    return candidate
+                target = entry.get("resolved")
+                return target if isinstance(target, str) and target in packages else None
+        if not parts:
+            return None
+        parts.pop()
+
+
+def _correct_from_lock(bom: dict, packages: dict[str, dict]) -> None:
+    """Give a version installed at several lock paths the scope and edges of every path.
+
+    npm 11 lists such a version once, as the first of its install paths has
+    it: that path's scope, development flag and dependency edges, and nothing
+    of the other paths. A version nested under both a development and a
+    production parent is then marked optional and development when the
+    development copy comes first, and the edges the other copies resolve to
+    are lost. The lock still has every path, so:
+
+    - the component is required if any path is not dev, optional or
+      devOptional, and keeps cdx:npm:package:development only if every path
+      is dev, as npm 10's copies merge;
+    - its dependency entry also depends on whatever each path's dependencies
+      resolve to from that path, if npm lists it.
+
+    A scope is only ever raised and an edge only ever added. Versions installed
+    at one path, and entries that already agree with the lock, such as npm 10's
+    merged copies, are left as they are. A changed dependency list is sorted.
+    """
+    paths: dict[str, list[str]] = {}
+    for path, entry in packages.items():
+        # npm lists neither the project itself nor a link, only its target.
+        if not path or entry.get("link"):
+            continue
+        if (ref := _locked_ref(path, entry)) is not None:
+            paths.setdefault(ref, []).append(path)
+    nested = {ref: found for ref, found in paths.items() if len(found) > 1}
+    if not nested:
+        return
+
+    components = bom.get("components") or []
+    listed = {component.get("bom-ref") for component in components}
+    for component in components:
+        found = nested.get(component.get("bom-ref"))
+        if found is None:
+            continue
+        entries = [packages[path] for path in found]
+        needed = any(
+            not (entry.get("dev") or entry.get("optional") or entry.get("devOptional"))
+            for entry in entries
+        )
+        if needed and component.get("scope", "required") != "required":
+            component["scope"] = "required"
+        properties = component.get("properties") or []
+        if not all(entry.get("dev") for entry in entries):
+            kept = [item for item in properties if item.get("name") != _DEVELOPMENT_PROPERTY]
+            if len(kept) != len(properties):
+                component["properties"] = kept
+
+    for dependency in bom.get("dependencies") or []:
+        found = nested.get(dependency.get("ref"))
+        if found is None:
+            continue
+        written = dependency.get("dependsOn") or []
+        edges = set(written)
+        for path in found:
+            entry = packages[path]
+            fields = _EDGE_FIELDS if "node_modules" in path.split("/") else _TOP_EDGE_FIELDS
+            for field in fields:
+                wanted = entry.get(field)
+                for name in wanted if isinstance(wanted, dict) else ():
+                    target = _resolve(packages, path, name)
+                    child = None if target is None else _locked_ref(target, packages[target])
+                    # npm drops an edge to a package it does not list.
+                    if child in listed:
+                        edges.add(child)
+        if edges != set(written):
+            dependency["dependsOn"] = sorted(edges)
 
 
 def _stamp(
@@ -223,6 +349,7 @@ def generate_sbom(
 
     bom = _run_npm(node.package.parent)
     _merge_install_paths(bom)
+    _correct_from_lock(bom, _read_lock(node.lock))
     _stamp(
         bom,
         config=config,
