@@ -52,6 +52,12 @@ Node evidence uses `package-lock.json` without omitting development or optional
 dependencies. `node audit` fails on any reported vulnerability, whatever its
 severity, that is not an [accepted risk](#accepted-risks).
 
+A version the lock installs at several paths, nested under different parents
+because another version holds the top-level slot, is one component in the SBOM.
+It lists every install path, is required if any path needs it in production,
+and depends on everything any of its copies resolves to. npm 10 writes it once
+per path; `node sbom` merges those copies.
+
 ## Release cooldown
 
 A supply-chain attack on a package arrives as a version published minutes ago

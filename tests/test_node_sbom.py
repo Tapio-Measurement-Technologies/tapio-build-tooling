@@ -1,5 +1,8 @@
+import base64
+import hashlib
 from pathlib import Path
 import json
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -66,6 +69,116 @@ def npm_bom() -> dict:
             {"ref": "demo@0.0.0", "dependsOn": ["vite@6.4.3", "qrcode@1.5.4"]},
         ],
     }
+
+
+def _digest(name: str, version: str) -> bytes:
+    return hashlib.sha512(f"{name}-{version}.tgz".encode()).digest()
+
+
+def _locked(name: str, version: str, **extra) -> dict:
+    return {
+        "version": version,
+        "resolved": f"https://registry.npmjs.org/{name}/-/{name}-{version}.tgz",
+        "integrity": "sha512-" + base64.b64encode(_digest(name, version)).decode(),
+        **extra,
+    }
+
+
+# c@2.0.0 and e@2.0.0 hold the top-level slots, so c@1.0.0 and e@1.0.0 are
+# each installed twice: under the development dependency a, and under the
+# production dependency b. npm cannot dedupe them. c@1.0.0's own dependency d
+# resolves to a's nested d@1.0.0 at one path and to the hoisted d@1.1.0 at the
+# other; e@1.0.0 depends on nothing, so npm 10 writes two identical dependency
+# entries for it.
+NESTED_PACKAGE = {
+    "name": "demo",
+    "version": "0.0.0",
+    "private": True,
+    "dependencies": {"b": "1.0.0", "c": "2.0.0", "e": "2.0.0"},
+    "devDependencies": {"a": "1.0.0"},
+}
+NESTED_LOCK = {
+    "name": "demo",
+    "version": "0.0.0",
+    "lockfileVersion": 3,
+    "requires": True,
+    "packages": {
+        "": {
+            "name": "demo",
+            "version": "0.0.0",
+            "dependencies": {"b": "1.0.0", "c": "2.0.0", "e": "2.0.0"},
+            "devDependencies": {"a": "1.0.0"},
+        },
+        "node_modules/a": _locked(
+            "a", "1.0.0", dev=True, dependencies={"c": "1.0.0", "e": "1.0.0"}
+        ),
+        "node_modules/a/node_modules/c": _locked(
+            "c", "1.0.0", dev=True, dependencies={"d": "^1.0.0"}
+        ),
+        "node_modules/a/node_modules/d": _locked("d", "1.0.0", dev=True),
+        "node_modules/a/node_modules/e": _locked("e", "1.0.0", dev=True),
+        "node_modules/b": _locked("b", "1.0.0", dependencies={"c": "1.0.0", "e": "1.0.0"}),
+        "node_modules/b/node_modules/c": _locked("c", "1.0.0", dependencies={"d": "^1.0.0"}),
+        "node_modules/b/node_modules/e": _locked("e", "1.0.0"),
+        "node_modules/c": _locked("c", "2.0.0"),
+        "node_modules/d": _locked("d", "1.1.0"),
+        "node_modules/e": _locked("e", "2.0.0"),
+    },
+}
+
+
+def _npm10_component(ref: str, path: str, *, development: bool = False) -> dict:
+    name, version = ref.rsplit("@", 1)
+    properties = [{"name": "cdx:npm:package:path", "value": path}]
+    if development:
+        properties.append({"name": "cdx:npm:package:development", "value": "true"})
+    return {
+        "bom-ref": ref,
+        "type": "library",
+        "name": name,
+        "version": version,
+        "scope": "optional" if development else "required",
+        "purl": f"pkg:npm/{ref}",
+        "properties": properties,
+        "externalReferences": [
+            {
+                "type": "distribution",
+                "url": f"https://registry.npmjs.org/{name}/-/{name}-{version}.tgz",
+            }
+        ],
+        "hashes": [{"alg": "SHA-512", "content": _digest(name, version).hex()}],
+    }
+
+
+def npm10_nested_bom() -> dict:
+    """What npm 10 writes for NESTED_LOCK: a component and a dependency entry per install path."""
+    bom = npm_bom()
+    bom["components"] = [
+        _npm10_component("a@1.0.0", "node_modules/a", development=True),
+        _npm10_component("c@1.0.0", "node_modules/a/node_modules/c", development=True),
+        _npm10_component("d@1.0.0", "node_modules/a/node_modules/d", development=True),
+        _npm10_component("e@1.0.0", "node_modules/a/node_modules/e", development=True),
+        _npm10_component("b@1.0.0", "node_modules/b"),
+        _npm10_component("c@1.0.0", "node_modules/b/node_modules/c"),
+        _npm10_component("e@1.0.0", "node_modules/b/node_modules/e"),
+        _npm10_component("c@2.0.0", "node_modules/c"),
+        _npm10_component("d@1.1.0", "node_modules/d"),
+        _npm10_component("e@2.0.0", "node_modules/e"),
+    ]
+    bom["dependencies"] = [
+        {"ref": "demo@0.0.0", "dependsOn": ["b@1.0.0", "c@2.0.0", "e@2.0.0", "a@1.0.0"]},
+        {"ref": "a@1.0.0", "dependsOn": ["c@1.0.0", "e@1.0.0"]},
+        {"ref": "c@1.0.0", "dependsOn": ["d@1.0.0"]},
+        {"ref": "d@1.0.0", "dependsOn": []},
+        {"ref": "e@1.0.0", "dependsOn": []},
+        {"ref": "b@1.0.0", "dependsOn": ["c@1.0.0", "e@1.0.0"]},
+        {"ref": "c@1.0.0", "dependsOn": ["d@1.1.0"]},
+        {"ref": "e@1.0.0", "dependsOn": []},
+        {"ref": "c@2.0.0", "dependsOn": []},
+        {"ref": "d@1.1.0", "dependsOn": []},
+        {"ref": "e@2.0.0", "dependsOn": []},
+    ]
+    return bom
 
 
 class NodeSbomTests(unittest.TestCase):
@@ -141,6 +254,114 @@ class NodeSbomTests(unittest.TestCase):
                 output="bad.cdx.json",
                 version="1",
             )
+
+    def _generate(self, npm_output: dict) -> dict:
+        with patch("tapio_build_tools.ecosystems.node.sbom.subprocess.run") as run:
+            run.return_value = subprocess.CompletedProcess(
+                [], 0, stdout=json.dumps(npm_output)
+            )
+            output = generate_sbom(
+                self.config,
+                product_id="demo",
+                output="demo.cdx.json",
+                version="1.2.3",
+                commit_sha="abc",
+                build_platform="linux",
+                build_timestamp="2026-07-16T00:00:00Z",
+            )
+        return json.loads(output.read_text())
+
+    def test_lists_a_version_installed_at_several_paths_once(self) -> None:
+        bom = self._generate(npm10_nested_bom())
+
+        self.assertEqual(
+            [item["bom-ref"] for item in bom["components"]],
+            [
+                "a@1.0.0",
+                "c@1.0.0",
+                "d@1.0.0",
+                "e@1.0.0",
+                "b@1.0.0",
+                "c@2.0.0",
+                "d@1.1.0",
+                "e@2.0.0",
+            ],
+        )
+        nested = next(item for item in bom["components"] if item["bom-ref"] == "c@1.0.0")
+        # b needs it in production, so it is not a development dependency
+        # even though the copy under a, listed first, is one.
+        self.assertEqual(nested["scope"], "required")
+        self.assertEqual(
+            nested["properties"],
+            [
+                {"name": "cdx:npm:package:path", "value": "node_modules/a/node_modules/c"},
+                {"name": "cdx:npm:package:path", "value": "node_modules/b/node_modules/c"},
+            ],
+        )
+        graph = {item["ref"]: item["dependsOn"] for item in bom["dependencies"]}
+        self.assertEqual(len(graph), len(bom["dependencies"]))
+        self.assertEqual(graph["c@1.0.0"], ["d@1.0.0", "d@1.1.0"])
+        self.assertEqual(graph["e@1.0.0"], [])
+        self.assertEqual(graph["a@1.0.0"], ["c@1.0.0", "e@1.0.0"])
+        self.assertEqual(graph["b@1.0.0"], ["c@1.0.0", "e@1.0.0"])
+        root = bom["metadata"]["component"]["bom-ref"]
+        self.assertEqual(graph[root], ["a@1.0.0", "b@1.0.0", "c@2.0.0", "e@2.0.0"])
+
+    def test_keeps_development_when_every_copy_is_development(self) -> None:
+        npm_output = npm10_nested_bom()
+        npm_output["components"][5] = _npm10_component(
+            "c@1.0.0", "node_modules/b/node_modules/c", development=True
+        )
+
+        bom = self._generate(npm_output)
+
+        nested = next(item for item in bom["components"] if item["bom-ref"] == "c@1.0.0")
+        self.assertEqual(nested["scope"], "optional")
+        self.assertIn(
+            {"name": "cdx:npm:package:development", "value": "true"}, nested["properties"]
+        )
+
+    def test_rejects_copies_of_a_version_that_differ(self) -> None:
+        npm_output = npm10_nested_bom()
+        npm_output["components"][5]["hashes"] = [{"alg": "SHA-512", "content": "0" * 128}]
+        with self.assertRaisesRegex(SbomError, "c@1.0.0"):
+            self._generate(npm_output)
+
+    @unittest.skipIf(shutil.which("npm") is None, "npm is not installed")
+    def test_npm_sbom_of_a_lock_with_nested_copies_validates(self) -> None:
+        (self.root / "package.json").write_text(json.dumps(NESTED_PACKAGE), encoding="utf-8")
+        (self.root / "package-lock.json").write_text(json.dumps(NESTED_LOCK), encoding="utf-8")
+        output = generate_sbom(
+            self.config,
+            product_id="demo",
+            output="demo.cdx.json",
+            version="1.2.3",
+            commit_sha="abc",
+            build_platform="linux",
+            build_timestamp="2026-07-16T00:00:00Z",
+        )
+        bom = json.loads(output.read_text())
+        refs = [item["bom-ref"] for item in bom["components"]]
+        self.assertEqual(len(refs), len(set(refs)))
+        self.assertEqual(
+            set(refs),
+            {
+                "a@1.0.0",
+                "b@1.0.0",
+                "c@1.0.0",
+                "c@2.0.0",
+                "d@1.0.0",
+                "d@1.1.0",
+                "e@1.0.0",
+                "e@2.0.0",
+            },
+        )
+        graph = {item["ref"]: item["dependsOn"] for item in bom["dependencies"]}
+        self.assertEqual(len(graph), len(bom["dependencies"]))
+        self.assertEqual(graph["a@1.0.0"], ["c@1.0.0", "e@1.0.0"])
+        self.assertEqual(graph["b@1.0.0"], ["c@1.0.0", "e@1.0.0"])
+        root = bom["metadata"]["component"]["bom-ref"]
+        self.assertEqual(graph[root], ["a@1.0.0", "b@1.0.0", "c@2.0.0", "e@2.0.0"])
 
 
 if __name__ == "__main__":
